@@ -104,7 +104,7 @@ if [ -e "$DMCRYPTED_HOMECONTAINER" ]; then
 fi
 
 # prepare (2/4) (LUKS format)
-if $NEED_FORMAT; then
+if [ "$NEED_FORMAT" = "true" ]; then
   echo_if_not_quiet "LUKS format container..."
   "$CRYPTSETUP" -q luksFormat --type luks2 "$HOMECONTAINER" || die "Couldn't LUKS format container at \"$HOMECONTAINER\""
 elif ! "$FILE" "$HOMECONTAINER" | grep -q "LUKS encrypted file"; then
@@ -125,7 +125,7 @@ if [ ! -e "$DMCRYPTED_HOMECONTAINER" ]; then
 fi
 
 # prepare (4/4) (mkfs if needed)
-if $NEED_FORMAT; then
+if [ "$NEED_FORMAT" = "true" ]; then
   echo_if_not_quiet "Format uncrypted container..."
   "$MKFS.$FS_TYPE" "$DMCRYPTED_HOMECONTAINER"
 fi
@@ -136,7 +136,7 @@ trap tear_down SIGTERM SIGINT
 # change into new environment
 echo_if_not_quiet "Change into container..."
 MOUNT_CMD="\"$MOUNT\" \"$DMCRYPTED_HOMECONTAINER\" \"$HOME\""
-if $NEED_FORMAT; then
+if [ "$NEED_FORMAT" = "true" ]; then
   MOUNT_CMD="$MOUNT_CMD && chown \"$USER:\" -R \"$HOME\""
 fi
 MOUNT_CMD="$MOUNT_CMD && cd \"$HOME\""
