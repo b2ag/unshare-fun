@@ -3,64 +3,148 @@
 # Author: b2ag
 
 # some stupid stuff
+BLOCKDEV="$( which blockdev )"
 CAT="$( which cat )"
 CRYPTSETUP="$( which cryptsetup )"
 CUT="$( which cut )"
 DATE="$( which date )"
 DD="$( which dd )"
+DU="$( which du )"
 FILE="$( which file )"
 FSCK="$( which fsck )"
+GETOPT="$( which getopt )"
+GREP="$( which grep )"
 ID="$( which id )"
 MKFS="$( which mkfs )"
 MOUNT="$( which mount )"
+RESIZE2FS="$( which resize2fs )"
 RM="$( which rm )"
+SED="$( which sed )"
 SH="$( which sh )"
-SUDO="$( which sudo )"
-SU="$( which su )"
 SLEEP="$( which sleep )"
+STAT="$( which stat )"
+SU="$( which su )"
+SUDO="$( which sudo )"
 TAIL="$( which tail )"
+TRUNCATE="$( which truncate )"
 UNSHARE="$( which unshare )"
 XARGS="$( which xargs )"
 
 # some interesting stuff
-APPLICATION="$( which "$1" 2>/dev/null )"
+APPLICATION=
+APPLICATION_ARGS=
 HASHCMD="$( which sha256sum )"
-APPLICATION_ID="$( basename "$APPLICATION" )-$( echo "$APPLICATION" | "$HASHCMD" |"$CUT" -f1 -d' ' )"
-DMCRYPTED_HOMECONTAINER="/dev/mapper/$APPLICATION_ID"
-HOMECONTAINER="$HOME/crypted-home-for-$APPLICATION_ID"
-SIZE_IN_MiB=1024 # MiB
-FS_TYPE=ext4
+HOMECONTAINER=
+USER_HOMECONTAINER=
+APPLICATION_ID=
+USER_APPLICATION_ID=
+DMCRYPTED_HOMECONTAINER=
+CONTAINER_SIZE="1024M"
+FS_TYPE="ext4"
 TEAR_DOWN_TIMEOUT=10 # Seconds
-QUIET="$QUIET"
+QUIET=
 LOG_PREFIX="[$0]"
 UNSHARE_OPTIONS="--kill-child --fork --pid --mount-proc --mount" # --net --ipc
+DO_RESIZE=
 
 print_usage() {
-  echo "Usage: $0 executable [arguments]" > /dev/stderr
+  cat <<USAGE > /dev/stderr
+Usage:
+  $0 [options] [--] <application> [arguments]
+
+Runs application within an encrypted sandboxed filesystem used as home shadowing users original home directory.
+
+Options:
+  -c, --container=FILE            File used as container for encrypted home ( default: "~/crypted-home-for-IDENTIFIER" )
+  -f, --fs-type=TYPE              Filesystem type inside container ( default: $FS_TYPE )
+  -H, --hash=COMMAND              Hash executable used to build application identifier ( default: $HASHCMD )
+  -i, --id=IDENTIFIER             Used to seperate containers for different applications with same basename ( default: "APP:BASENAME_APP:PATH:HASH" )
+  -r, --resize=SIZE               Resize an existing container
+  -s, --size=SIZE                 Maximum size of container ( default: $CONTAINER_SIZE )
+  -t, --teardown-timeout=SECONDS  Timeout for closing the container ( default: $TEAR_DOWN_TIMEOUT seconds )
+  -q, --quiet                     Suppress extra output
+  -h, --help                      Display this help and exits
+
+USAGE
 }
 
-# check required script parameters
-if [ ! -x "$APPLICATION" ]; then
-  print_usage
-  exit 1
-fi
+# original toBytes by user1088084 - https://stackoverflow.com/a/24289918/6257086
+toBytes() { local X="$( echo $1 | "$SED" 's/.*/\L\0/;s/t/Xg/g;s/g/Xm/g;s/m/Xk/g;s/k/X/g;s/b//g;s/X/ *1024/g' )" && echo "$X" | grep -qv "[^0-9\* ]" && echo $(("$X")); }
+
+parse_options() {
+  if (( $# == 0 )); then
+    print_usage
+    exit 1
+  fi
+  OPTS=$( POSIXLY_CORRECT=1 "$GETOPT" --options 'c:f:H:i:r:s:t:q:h' --longoptions 'container:,fs-type:,hash:,id:,resize:,size:,teardown-timeout,quiet,help' --name "$0" -- "$@" )
+  GETOPT_RETURN_CODE=$?
+  if [ "$GETOPT_RETURN_CODE" != "0" ]; then
+    print_usage
+    exit 1
+  fi
+  eval set -- "$OPTS"
+  while (( $# > 0 )); do
+    case "$1" in
+      -c|--container) shift; USER_HOMECONTAINER="$1";;
+      -f|--fs-type) shift; FS_TYPE="$1"; { which "$MKFS.$FS_TYPE" && which "$FSCK.$FS_TYPE"; } >/dev/null 2>&1 || die "Mkfs \"$MKFS.$FS_TYPE\" or fsck \"$FSCK.$FS_TYPE\" missing for filesystem type \"$1\"";;
+      -H|--hash) shift; HASHCMD="$( which "$1" 2>/dev/null )" || die "Hash executable \"$1\" not found or not executable";;
+      -i|--id) shift; USER_APPLICATION_ID="$1";;
+      -r|--resize) shift; [ "$( toBytes "$1")" -gt 0 ] 2>/dev/null && DO_RESIZE="$1" || die "Resize size \"$1\" seems to be invalid";;
+      -s|--size) shift; [ "$( toBytes "$1")" -gt 0 ] 2>/dev/null && CONTAINER_SIZE="$1" || die "Container size \"$1\" seems to be invalid";;
+      -t|--teardown-timeout) shift; [ "$1" -gt 0 ] 2>/dev/null && TEAR_DOWN_TIMEOUT="$1" || die "Timeout \"$1\" seems to be invalid";;
+      --) shift; APPLICATION="$( which "$1" 2>/dev/null )" || die "Application executable \"$1\" not found or not executable"; shift; APPLICATION_ARGS=( "$@" ); break;;
+      -h|--help) print_usage; exit 0;;
+      *) echo "$LOG_PREFIX getopt error" > /dev/stderr; exit 128;;
+    esac
+    shift;
+  done
+  if [ -n "$USER_APPLICATION_ID" ]; then
+    APPLICATION_ID="$USER_APPLICATION_ID"
+  else
+    APPLICATION_ID="$( basename "$APPLICATION" )-$( echo "$APPLICATION" | "$HASHCMD" |"$CUT" -f1 -d' ' )"
+  fi
+  if [ -n "$USER_HOMECONTAINER" ]; then
+    HOMECONTAINER="$USER_HOMECONTAINER"
+  else
+    HOMECONTAINER="$HOME/crypted-home-for-$APPLICATION_ID"
+  fi
+  DMCRYPTED_HOMECONTAINER="/dev/mapper/$APPLICATION_ID"
+}
 
 echo_if_not_quiet() { [ -z "$QUIET" ] && echo "$LOG_PREFIX $@" || true; }
+
+print_info() {
+  echo_if_not_quiet "Options:"
+  echo_if_not_quiet " Application executable: $APPLICATION"
+  echo_if_not_quiet " Application identifier: $APPLICATION_ID"
+  echo_if_not_quiet " Application arguments: ${APPLICATION_ARGS[@]}"
+  echo_if_not_quiet " Container filesystem: $FS_TYPE"
+  echo_if_not_quiet " Container size: $CONTAINER_SIZE"
+  echo_if_not_quiet " Container path: $HOMECONTAINER $( [ -e "$HOMECONTAINER" ] && echo "(exists)")"
+  echo_if_not_quiet " Mapped dm-crypt path: $DMCRYPTED_HOMECONTAINER $( [ -e "$DMCRYPTED_HOMECONTAINER" ] && echo "(exists)")"
+}
 
 escalate_priviledges() {
   if [ "$( "$ID" -u )" != "0" ]; then
     echo_if_not_quiet "Need to escalate priviledges"
-    exec "$SUDO" -E "USER=$USER" "HOME=$HOME" "NEED_FORMAT=$NEED_FORMAT" "QUIET=$QUIET" "$0" "$@"
+    exec "$SUDO" -E "USER=$USER" "HOME=$HOME" "NEED_FORMAT=$NEED_FORMAT" "$0" "$@"
   fi
   echo "$LOG_PREFIX Something is wrong" > /dev/stderr
   exit 8
 }
 
+# die helper vars
+CONTAINER_OPEN=
+DIE_RECURSION_STOP=
 die() {
   echo "$LOG_PREFIX $@" > /dev/stderr
-  if $NEED_FORMAT && [ -e "$HOMECONTAINER" ] && ! "$FILE" "$HOMECONTAINER" | grep -q "LUKS encrypted file"; then
+  if [ "$NEED_FORMAT" = "true" ] && [ -e "$HOMECONTAINER" ] && ! "$FILE" "$HOMECONTAINER" | grep -q "LUKS encrypted file"; then
     echo "$LOG_PREFIX Removing unformated container at \"$HOMECONTAINER\"" > /dev/stderr
     "$RM" "$HOMECONTAINER"
+  fi
+  if [ "$CONTAINER_OPEN" = "true" ] && [ -z "$DIE_RECURSION_STOP" ]; then
+    DIE_RECURSION_STOP=true
+    tear_down
   fi
   exit 1
 }
@@ -81,81 +165,151 @@ tear_down() {
   true
 }
 
-# prepare (1/4) (create empty file if needed)
-if [ "$( "$ID" -u )" != "0" ] && [ ! -e "$HOMECONTAINER" ]; then
-  echo_if_not_quiet "Create container of size $SIZE_IN_MiB mebibyte"
-  NEED_FORMAT=true
-  "$DD" bs=$((1024*1024)) count=$SIZE_IN_MiB if=/dev/zero "of=$HOMECONTAINER" || die "Couldn't prepare empty container at \"$HOMECONTAINER\""
-  escalate_priviledges "$@"
-fi
+create_empty_container() {
+  if [ ! -e "$HOMECONTAINER" ]; then
+    echo_if_not_quiet "Create container of size $CONTAINER_SIZE"
+    "$TRUNCATE" --size "$CONTAINER_SIZE" "$HOMECONTAINER" || die "Couldn't create empty container at \"$HOMECONTAINER\" to size \"$CONTAINER_SIZE\""
+    echo_if_not_quiet "Empty container is not yet LUKS formated. If sudo fails you need to remove \"$HOMECONTAINER\" and start over."
+  fi
+}
 
-# become root now
-if [ "$( "$ID" -u )" != "0" ]; then
-  NEED_FORMAT=false
-  escalate_priviledges "$@"
-fi
-
-# check if dm-crypt already has our container open
-if [ -e "$DMCRYPTED_HOMECONTAINER" ]; then
-  echo "Container already open \"$DMCRYPTED_HOMECONTAINER\""
-  read -p "Do you want to close it? [y/N] " yn
-  case "$yn" in
-    [Yy] ) tear_down ;;
-    [Yy][Ee][Ss] ) tear_down ;;
-    * ) exit 2;;
-  esac
-fi
-
-# prepare (2/4) (LUKS format)
-if [ "$NEED_FORMAT" = "true" ]; then
+luks_format_container() {
   echo_if_not_quiet "LUKS format container"
+  if "$FILE" "$HOMECONTAINER" | grep -q "LUKS encrypted file"; then
+    die "Container already contains a LUKS header. Refuse to work"
+  fi
   "$CRYPTSETUP" -q luksFormat --type luks2 "$HOMECONTAINER" || die "Couldn't LUKS format container at \"$HOMECONTAINER\""
-elif ! "$FILE" "$HOMECONTAINER" | grep -q "LUKS encrypted file"; then
-  die "Container missing LUKS header at \"$HOMECONTAINER\""
-fi
+}
 
-# prepare (3/4) (LUKS open)
-if [ ! -e "$HOMECONTAINER" ]; then
-  die "Couldn't find container at \"$HOMECONTAINER\""
-else
-  echo_if_not_quiet "LUKS open container"
-  "$CRYPTSETUP" open --type luks "$HOMECONTAINER" "$APPLICATION_ID" || die "Couldn't open container \"$HOMECONTAINER\""
-fi
+luks_open_container() {
+  if [ ! -e "$HOMECONTAINER" ]; then
+    die "Couldn't find container at \"$HOMECONTAINER\""
+  else
+    echo_if_not_quiet "LUKS open container"
+    "$CRYPTSETUP" open --type luks "$HOMECONTAINER" "$APPLICATION_ID" || die "Couldn't open container \"$HOMECONTAINER\""
+  fi
+}
 
-# check if dm-crypt worked
-if [ ! -e "$DMCRYPTED_HOMECONTAINER" ]; then
-  die "Couldn't find open container at \"$DMCRYPTED_HOMECONTAINER\""
-fi
-
-# prepare (4/4) (mkfs if needed)
-if [ "$NEED_FORMAT" = "true" ]; then
+mkfs_open_container() {
   echo_if_not_quiet "Format uncrypted container"
-  echo_if_not_quiet "Warning: Random data (cause fresh crypted device) seen has filesystem headers may irritate mkfs"
-  "$MKFS.$FS_TYPE" "$DMCRYPTED_HOMECONTAINER" || die "Couldn't format filesystem \"$FS_TYPE\" with \"$(basename "$MKFS.$FS_TYPE")\" for container \"$HOMECONTAINER\""
-else
-  echo_if_not_quiet "Filesystem check on uncrypted container"
-  if ! "$FSCK.$FS_TYPE" "$DMCRYPTED_HOMECONTAINER"; then
+  echo_if_not_quiet "Warning: Random data (cause fresh crypted device) seen as filesystem headers may irritate mkfs"
+  "$MKFS.$FS_TYPE" "$DMCRYPTED_HOMECONTAINER" || die "Couldn't create \"$FS_TYPE\" filesystem with \"$(basename "$MKFS.$FS_TYPE")\" for container \"$HOMECONTAINER\""
+}
+fsck_open_container() {
+  echo_if_not_quiet "Filesystem check on open container"
+  if ! "$FSCK.$FS_TYPE" $1 "$DMCRYPTED_HOMECONTAINER"; then
     die "Container filesystem or fsck tool \"$FSCK.$FS_TYPE\" corrupt"
   fi
-fi
+}
 
-# install trap handler
-trap tear_down SIGTERM SIGINT
+decide_about_resize() {
+  RESIZE_MODE=
+  if [ -n "$DO_RESIZE" ]; then
+    [ -e "$HOMECONTAINER" ] || die "Can't resize no-existing container \"$HOMECONTAINER\""
+    CONTAINER_SIZE="$( "$STAT" --printf="%s" "$HOMECONTAINER" )"
+    NEW_SIZE="$( toBytes "$DO_RESIZE" )"
+    [ "$( "$ID" -u )" = "0" ] || [ "$NEW_SIZE" -ne "$CONTAINER_SIZE" ] || echo "$LOG_PREFIX Warning: Option resize given, but container already has size \"$DO_RESIZE\""
+    [ "$FS_TYPE" = "ext2" ] || [ "$FS_TYPE" = "ext3" ] || [ "$FS_TYPE" = "ext4" ] || die "Option resize only supports ext filesystem types"
+    [ -x "$RESIZE2FS" ] || die "Resize tool \"$RESIZE2FS\" is not executable"
+    if [ "$NEW_SIZE" -gt "$CONTAINER_SIZE" ]; then
+      RESIZE_MODE="expand"
+      echo_if_not_quiet "Inflate container file"
+      "$TRUNCATE" --size "$DO_RESIZE" "$HOMECONTAINER" || die "Couldn't inflate container at \"$HOMECONTAINER\" to size \"$DO_RESIZE\""
+    elif [ "$NEW_SIZE" -lt "$CONTAINER_SIZE" ]; then
+      RESIZE_MODE="shrink"
+    else
+      # just run resize2fs
+      RESIZE_MODE="auto"
+    fi
+    NEED_FORMAT=false
+  fi
+}
 
-# change into new environment
-echo_if_not_quiet "Change into container"
-MOUNT_CMD="\"$MOUNT\" \"$DMCRYPTED_HOMECONTAINER\" \"$HOME\""
-if [ "$NEED_FORMAT" = "true" ]; then
-  MOUNT_CMD="$MOUNT_CMD && chown \"$USER:\" -R \"$HOME\""
-fi
-MOUNT_CMD="$MOUNT_CMD && cd \"$HOME\""
-if (( $# >= 2 )); then
-  # first part of this line ensures arguments are handed over properly
-  "$CAT" /proc/$$/cmdline | "$TAIL" -z -n+4 | "$UNSHARE" $UNSHARE_OPTIONS "$SH" -c "$MOUNT_CMD && exec \"$SU\" -c \"exec \\\"$XARGS\\\" -0 \\\"$APPLICATION\\\"\" --preserve-environment \"$USER\""
-else
-  # no extra arguments, pass stdin
-  "$UNSHARE" $UNSHARE_OPTIONS "$SH" -c "$MOUNT_CMD && exec \"$SU\" -c \"exec \\\"$APPLICATION\\\"\" --preserve-environment \"$USER\""
-fi
+main() {
 
-tear_down
-echo_if_not_quiet "Everything went fine. Bye!"
+  parse_options "$@"
+  [ "$( "$ID" -u )" != "0" ] && print_info
+
+  # handle resize
+  decide_about_resize
+
+  # prepare (1/4) (create empty file if needed)
+  [ -z "$NEED_FORMAT" ] && NEED_FORMAT=false
+  if [ "$( "$ID" -u )" != "0" ] && [ ! -e "$HOMECONTAINER" ]; then
+    NEED_FORMAT=true
+    create_empty_container
+  fi
+  # become root now
+  if [ "$( "$ID" -u )" != "0" ]; then
+    escalate_priviledges "$@"
+  fi
+  # check if dm-crypt already opened our container
+  if [ -e "$DMCRYPTED_HOMECONTAINER" ]; then
+    echo "Container already open \"$DMCRYPTED_HOMECONTAINER\""
+    read -p "Do you want to close it? [y/N] " yn
+    case "$yn" in
+      [Yy] ) tear_down ;;
+      [Yy][Ee][Ss] ) tear_down ;;
+      * ) exit 2;;
+    esac
+  fi
+  # prepare (2/4) (LUKS format if needed)
+  if [ "$NEED_FORMAT" = "true" ]; then
+    luks_format_container
+  elif ! "$FILE" "$HOMECONTAINER" | grep -q "LUKS encrypted file"; then
+    die "Container missing LUKS header at \"$HOMECONTAINER\""
+  fi
+  # prepare (3/4) (LUKS open)
+  luks_open_container
+  # check if dm-crypt worked
+  if [ ! -e "$DMCRYPTED_HOMECONTAINER" ]; then
+    die "Couldn't find open container at \"$DMCRYPTED_HOMECONTAINER\""
+  else
+    CONTAINER_OPEN=true
+  fi
+  # prepare (4/4) (filesystem)
+  if [ "$NEED_FORMAT" = "true" ]; then
+    mkfs_open_container
+  else
+    # resize fs
+    if [ -n "$RESIZE_MODE" ]; then
+      fsck_open_container "-f"
+      DMCRYPT_OFFSET="$(( $CONTAINER_SIZE - "$( "$BLOCKDEV" --getsize64 "$DMCRYPTED_HOMECONTAINER" )"  ))"
+      "$RESIZE2FS" "$DMCRYPTED_HOMECONTAINER" "$(( (( $( toBytes "$DO_RESIZE" ) - $DMCRYPT_OFFSET )) / 512 ))s" || die "Couldn't resize filesystem for device \"$DMCRYPTED_HOMECONTAINER\""
+    fi
+    # fsck
+    fsck_open_container
+    # close and truncate container if shrink is requested
+    if [ "$RESIZE_MODE" = "shrink" ]; then
+      tear_down
+      echo_if_not_quiet "Shrinking container file"
+      "$TRUNCATE" --size "$DO_RESIZE" "$HOMECONTAINER" || die "Couldn't shrink container at \"$HOMECONTAINER\" to size \"$DO_RESIZE\""
+      echo_if_not_quiet "Shrinking went fine. Bye!"
+      exit 0
+    fi
+  fi
+
+  # install trap handler
+  trap tear_down SIGTERM SIGINT
+
+  # change into new environment
+  echo_if_not_quiet "Change into container"
+  MOUNT_CMD="\"$MOUNT\" \"$DMCRYPTED_HOMECONTAINER\" \"$HOME\""
+  if [ "$NEED_FORMAT" = "true" ]; then
+    MOUNT_CMD="$MOUNT_CMD && chown \"$USER:\" -R \"$HOME\""
+  fi
+  MOUNT_CMD="$MOUNT_CMD && cd \"$HOME\""
+  if (( $# >= 2 )); then
+    # extra code to ensures arguments are handed over properly
+    { for x in "${APPLICATION_ARGS[@]}"; do printf '%s\0' "$x"; done; } | "$UNSHARE" $UNSHARE_OPTIONS "$SH" -c "$MOUNT_CMD && exec \"$SU\" -c \"exec \\\"$XARGS\\\" -0 \\\"$APPLICATION\\\"\" --preserve-environment \"$USER\""
+  else
+    # no extra arguments, pass stdin
+    "$UNSHARE" $UNSHARE_OPTIONS "$SH" -c "$MOUNT_CMD && exec \"$SU\" -c \"exec \\\"$APPLICATION\\\"\" --preserve-environment \"$USER\""
+  fi
+
+  tear_down
+  echo_if_not_quiet "Everything went fine. Bye!"
+
+}
+
+main "$@"
