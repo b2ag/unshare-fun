@@ -3,7 +3,7 @@ Experiments with unshare
 (currently only one)
 
 ## per-app-crypted-home.bash
-This script creates a crypted 1 GiB container used as home to run the application given as argument. It unshares only mountpoints and full attention is on $HOME. It is designed as a proof of concept of application sandboxing. The script also preserves environment variables and needs to switch to root.
+This script creates a crypted 1 GiB container used as home to run the application given as argument. It unshares only mountpoints and full attention is on $HOME. It is designed as a proof of concept of application sandboxing. The script also preserves environment variables and needs to switch to root. Shadowing of original home directory is intentional.
 
 ### Usage
 ```sh
