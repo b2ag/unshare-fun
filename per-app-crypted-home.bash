@@ -37,6 +37,7 @@ HOMECONTAINER=
 USER_HOMECONTAINER=
 APPLICATION_ID=
 USER_APPLICATION_ID=
+KEY_FILE=
 DMCRYPTED_HOMECONTAINER=
 CONTAINER_SIZE="1024M"
 FS_TYPE="ext4"
@@ -58,6 +59,7 @@ Options:
   -f, --fs-type=TYPE              Filesystem type inside container ( default: $FS_TYPE )
   -H, --hash=COMMAND              Hash executable used to build application identifier ( default: $HASHCMD )
   -i, --id=IDENTIFIER             Used to seperate containers for different applications with same basename ( default: "APP:BASENAME_APP:PATH:HASH" )
+  -k, --key-file=FILE             Use key from FILE instead of passphrase for dm-crypt
   -r, --resize=SIZE               Resize an existing container
   -s, --size=SIZE                 Maximum size of container ( default: $CONTAINER_SIZE )
   -t, --teardown-timeout=SECONDS  Timeout for closing the container ( default: $TEAR_DOWN_TIMEOUT seconds )
@@ -75,7 +77,7 @@ parse_options() {
     print_usage
     exit 1
   fi
-  OPTS=$( POSIXLY_CORRECT=1 "$GETOPT" --options 'c:f:H:i:r:s:t:q:h' --longoptions 'container:,fs-type:,hash:,id:,resize:,size:,teardown-timeout,quiet,help' --name "$0" -- "$@" )
+  OPTS=$( POSIXLY_CORRECT=1 "$GETOPT" --options 'c:f:H:i:k:r:s:t:q:h' --longoptions 'container:,fs-type:,hash:,id:,key-file:,resize:,size:,teardown-timeout,quiet,help' --name "$0" -- "$@" )
   GETOPT_RETURN_CODE=$?
   if [ "$GETOPT_RETURN_CODE" != "0" ]; then
     print_usage
@@ -88,6 +90,7 @@ parse_options() {
       -f|--fs-type) shift; FS_TYPE="$1"; { which "$MKFS.$FS_TYPE" && which "$FSCK.$FS_TYPE"; } >/dev/null 2>&1 || die "Mkfs \"$MKFS.$FS_TYPE\" or fsck \"$FSCK.$FS_TYPE\" missing for filesystem type \"$1\"";;
       -H|--hash) shift; HASHCMD="$( which "$1" 2>/dev/null )" || die "Hash executable \"$1\" not found or not executable";;
       -i|--id) shift; USER_APPLICATION_ID="$1";;
+      -k|--key-file) shift; KEY_FILE="$1";;
       -r|--resize) shift; [ "$( toBytes "$1")" -gt 0 ] 2>/dev/null && DO_RESIZE="$1" || die "Resize size \"$1\" seems to be invalid";;
       -s|--size) shift; [ "$( toBytes "$1")" -gt 0 ] 2>/dev/null && CONTAINER_SIZE="$1" || die "Container size \"$1\" seems to be invalid";;
       -t|--teardown-timeout) shift; [ "$1" -gt 0 ] 2>/dev/null && TEAR_DOWN_TIMEOUT="$1" || die "Timeout \"$1\" seems to be invalid";;
@@ -177,7 +180,9 @@ luks_format_container() {
   if "$FILE" "$HOMECONTAINER" | grep -q "LUKS encrypted file"; then
     die "Container already contains a LUKS header. Refuse to work"
   fi
-  "$CRYPTSETUP" -q luksFormat --type luks2 "$HOMECONTAINER" || die "Couldn't LUKS format container at \"$HOMECONTAINER\""
+  CMD=( "$CRYPTSETUP" luksFormat "$HOMECONTAINER" --type luks2 --batch-mode --verify-passphrase )
+  [ -n "$LUKS_KEY_FILE_ARG" ] && CMD+=( "$LUKS_KEY_FILE_ARG" );
+  "${CMD[@]}" || die "Couldn't LUKS format container at \"$HOMECONTAINER\""
 }
 
 luks_open_container() {
@@ -185,7 +190,9 @@ luks_open_container() {
     die "Couldn't find container at \"$HOMECONTAINER\""
   else
     echo_if_not_quiet "LUKS open container"
-    "$CRYPTSETUP" open --type luks "$HOMECONTAINER" "$APPLICATION_ID" || die "Couldn't open container \"$HOMECONTAINER\""
+    CMD=( "$CRYPTSETUP" open "$HOMECONTAINER" "$APPLICATION_ID" --type luks )
+    [ -n "$LUKS_KEY_FILE_ARG" ] && CMD+=( "$LUKS_KEY_FILE_ARG" );
+    "${CMD[@]}" || die "Couldn't open container \"$HOMECONTAINER\""
   fi
 }
 
@@ -252,6 +259,13 @@ main() {
       * ) exit 2;;
     esac
   fi
+  # key file option
+  if [ -n "$KEY_FILE" ]; then
+    [ -r "$KEY_FILE" ] || die "Couldn't read key file \"$KEY_FILE\""
+    LUKS_KEY_FILE_ARG="--key-file=$KEY_FILE"
+  else
+    LUKS_KEY_FILE_ARG=
+  fi
   # prepare (2/4) (LUKS format if needed)
   if [ "$NEED_FORMAT" = "true" ]; then
     luks_format_container
@@ -294,11 +308,12 @@ main() {
   # change into new environment
   echo_if_not_quiet "Change into container"
   MOUNT_CMD="\"$MOUNT\" \"$DMCRYPTED_HOMECONTAINER\" \"$HOME\""
+  MOUNT_CMD="$MOUNT_CMD && \"$MOUNT\" -t tmpfs tmpfs \"/tmp\""
   if [ "$NEED_FORMAT" = "true" ]; then
     MOUNT_CMD="$MOUNT_CMD && chown \"$USER:\" -R \"$HOME\""
   fi
   MOUNT_CMD="$MOUNT_CMD && cd \"$HOME\""
-  if (( $# >= 2 )); then
+  if (( ${#APPLICATION_ARGS[@]} > 0 )); then
     # extra code to ensures arguments are handed over properly
     { for x in "${APPLICATION_ARGS[@]}"; do printf '%s\0' "$x"; done; } | "$UNSHARE" $UNSHARE_OPTIONS "$SH" -c "$MOUNT_CMD && exec \"$SU\" -c \"exec \\\"$XARGS\\\" -0 \\\"$APPLICATION\\\"\" --preserve-environment \"$USER\""
   else
