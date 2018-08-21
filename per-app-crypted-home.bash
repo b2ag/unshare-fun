@@ -1,15 +1,18 @@
-#!/usr/bin/bash
+#!/usr/bin/env bash
 # License: GPL
 # Author: b2ag
 
 # some stupid stuff
+BASH="$( which bash )"
 BLOCKDEV="$( which blockdev )"
 CAT="$( which cat )"
 CRYPTSETUP="$( which cryptsetup )"
 CUT="$( which cut )"
+CHOWN="$( which chown )"
 DATE="$( which date )"
 DU="$( which du )"
 FILE="$( which file )"
+FINDMNT="$( which findmnt )"
 FSCK="$( which fsck )"
 GETOPT="$( which getopt )"
 GREP="$( which grep )"
@@ -44,7 +47,7 @@ FS_TYPE="ext4"
 TEAR_DOWN_TIMEOUT=10 # Seconds
 QUIET=
 LOG_PREFIX="[$0]"
-UNSHARE_OPTIONS="--kill-child --fork --pid --mount-proc --mount" # --net --ipc
+UNSHARE_OPTIONS=( --kill-child --fork --pid --mount-proc --mount ) # --net --ipc
 DO_RESIZE=
 
 print_usage() {
@@ -307,23 +310,41 @@ main() {
 
   # change into new environment
   echo_if_not_quiet "Change into container"
-  MOUNT_CMD="\"$MOUNT\" \"$DMCRYPTED_HOMECONTAINER\" \"$HOME\""
-  MOUNT_CMD="$MOUNT_CMD && \"$MOUNT\" -t tmpfs tmpfs \"/tmp\""
-  if [ "$NEED_FORMAT" = "true" ]; then
-    MOUNT_CMD="$MOUNT_CMD && chown \"$USER:\" -R \"$HOME\""
-  fi
-  MOUNT_CMD="$MOUNT_CMD && cd \"$HOME\""
-  if (( ${#APPLICATION_ARGS[@]} > 0 )); then
-    # extra code to ensures arguments are handed over properly
-    { for x in "${APPLICATION_ARGS[@]}"; do printf '%s\0' "$x"; done; } | "$UNSHARE" $UNSHARE_OPTIONS "$SH" -c "$MOUNT_CMD && exec \"$SU\" -c \"exec \\\"$XARGS\\\" -0 \\\"$APPLICATION\\\"\" --preserve-environment \"$USER\""
-  else
-    # no extra arguments, pass stdin
-    "$UNSHARE" $UNSHARE_OPTIONS "$SH" -c "$MOUNT_CMD && exec \"$SU\" -c \"exec \\\"$APPLICATION\\\"\" --preserve-environment \"$USER\""
-  fi
+  # application arguments
+  #if (( ${#APPLICATION_ARGS[@]} > 0 )); then
+  #  UNSHARE_CMDS+=( "${APPLICATION_ARGS[@]}" )
+  #fi
+
+
+  APPLICATION_CMD=( "$APPLICATION" )
+  APPLICATION_CMD+=( "${APPLICATION_ARGS[@]}" )
+  APPLICATION_CMD_SERIALIZED_L1="$( typeset -p APPLICATION_CMD )"
+  APPLICATION_CMD_SERIALIZED_L2="$( typeset -p APPLICATION_CMD_SERIALIZED_L1 )"
+  APPLICATION_CMD_SERIALIZED_L3="$( echo "${APPLICATION_CMD_SERIALIZED_L2::-1}" |cut -d'"' -f2- ); \\\"\\\${APPLICATION_CMD[@]}\\\""
+
+  #echo $APPLICATION_CMD_SERIALIZED_L3
+  #exit 52
+  [ "$NEED_FORMAT" = "true" ] && DO_CHOWN=true || DO_CHOWN=false
+  exec 3< <( cat <<UNSHARE_COMMANDS ;
+set -ex
+"$MOUNT" "$DMCRYPTED_HOMECONTAINER" "$HOME"
+$DO_CHOWN && "$CHOWN" "$USER:" "-R" "$HOME"
+cd "$HOME"
+exec 3<&-
+exec su "$USER" -s "$BASH" -c "$APPLICATION_CMD_SERIALIZED_L3"
+UNSHARE_COMMANDS
+)
+
+#cat /proc/self/fd/3
+  #exit 52
+
+  "$UNSHARE" "${UNSHARE_OPTIONS[@]}" "$BASH" "/proc/self/fd/3"
+  UNSHARE_EXIT=$?
+  #"$UNSHARE" $UNSHARE_OPTIONS "$SH" -c "$MOUNT_CMD && exec \"$SU\" -c \"exec \\\"$APPLICATION\\\"\" --preserve-environment \"$USER\""
 
   tear_down
   echo_if_not_quiet "Everything went fine. Bye!"
-
+  exit $UNSHARE_EXIT
 }
 
 main "$@"
