@@ -7,7 +7,7 @@ This script creates a crypted 1 GiB container used as home to run the applicatio
 
 ### Usage
 ```sh
-Usage: ./per-app-crypted-home.bash executable [arguments...]
+Usage: ./per-app-crypted-home.bash executable [arguments]
 ```
 ### Simple example
 ```sh
