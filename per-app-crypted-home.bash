@@ -55,7 +55,7 @@ escalate_priviledges() {
 
 die() {
   echo "$@" > /dev/stderr
-  if $NEED_FORMAT && [ -e "$HOMECONTAINER" ]; then
+  if $NEED_FORMAT && [ -e "$HOMECONTAINER" ] && ! "$FILE" "$HOMECONTAINER" | grep -q "LUKS encrypted file"; then
     echo "Removing unformated container at \"$HOMECONTAINER\"" > /dev/stderr
     "$RM" "$HOMECONTAINER"
   fi
