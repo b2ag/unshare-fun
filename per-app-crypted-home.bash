@@ -3,13 +3,15 @@
 # License: GPL
 
 # some stupid stuff
-CRYPTSETUP="$( which cryptsetup )"
 CAT="$( which cat )"
+CRYPTSETUP="$( which cryptsetup )"
 CUT="$( which cut )"
 DATE="$( which date )"
 DD="$( which dd )"
 FILE="$( which file )"
+FSCK="$( which fsck )"
 ID="$( which id )"
+MKFS="$( which mkfs )"
 MOUNT="$( which mount )"
 RM="$( which rm )"
 SH="$( which sh )"
@@ -19,7 +21,6 @@ SLEEP="$( which sleep )"
 TAIL="$( which tail )"
 UNSHARE="$( which unshare )"
 XARGS="$( which xargs )"
-MKFS="$( which mkfs )"
 
 # some interesting stuff
 APPLICATION="$( which "$1" 2>/dev/null )"
@@ -127,7 +128,10 @@ fi
 # prepare (4/4) (mkfs if needed)
 if [ "$NEED_FORMAT" = "true" ]; then
   echo_if_not_quiet "Format uncrypted container..."
-  "$MKFS.$FS_TYPE" "$DMCRYPTED_HOMECONTAINER"
+  echo_if_not_quiet "Warning: Random data (cause fresh crypted device) seen has filesystem headers may irritate mkfs"
+  "$MKFS.$FS_TYPE" "$DMCRYPTED_HOMECONTAINER" || die "Couldn't format filesystem \"$FS_TYPE\" with \"$(basename "$MKFS.$FS_TYPE")\" for container \"$HOMECONTAINER\""
+elif ! "$FSCK.$FS_TYPE" "$DMCRYPTED_HOMECONTAINER"; then
+  die "Container filesystem or fsck tool \"$FSCK.$FS_TYPE\" corrupt"
 fi
 
 # install trap handler
