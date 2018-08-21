@@ -32,6 +32,7 @@ SIZE_IN_MiB=1024 # MiB
 FS_TYPE=ext4
 TEAR_DOWN_TIMEOUT=10 # Seconds
 QUIET="$QUIET"
+LOG_PREFIX="[$0]: "
 
 print_usage() {
   echo "Usage: $0 executable [arguments...]" > /dev/stderr
@@ -43,21 +44,21 @@ if [ ! -x "$APPLICATION" ]; then
   exit 1
 fi
 
-echo_if_not_quiet() { [ -z "$QUIET" ] && echo "$@" || true; }
+echo_if_not_quiet() { [ -z "$QUIET" ] && echo "$LOG_PREFIX $@" || true; }
 
 escalate_priviledges() {
   if [ "$( "$ID" -u )" != "0" ]; then
     echo_if_not_quiet "Need to escalate priviledges..."
     exec "$SUDO" -E "USER=$USER" "HOME=$HOME" "NEED_FORMAT=$NEED_FORMAT" "QUIET=$QUIET" "$0" "$@"
   fi
-  echo "Something is wrong" > /dev/stderr
+  echo "$LOG_PREFIX Something is wrong" > /dev/stderr
   exit 8
 }
 
 die() {
-  echo "$@" > /dev/stderr
+  echo "$LOG_PREFIX $@" > /dev/stderr
   if $NEED_FORMAT && [ -e "$HOMECONTAINER" ] && ! "$FILE" "$HOMECONTAINER" | grep -q "LUKS encrypted file"; then
-    echo "Removing unformated container at \"$HOMECONTAINER\"" > /dev/stderr
+    echo "$LOG_PREFIX Removing unformated container at \"$HOMECONTAINER\"" > /dev/stderr
     "$RM" "$HOMECONTAINER"
   fi
   exit 1
