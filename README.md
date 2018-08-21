@@ -27,7 +27,15 @@ Options:
 ```sh
 ./per-app-crypted-home.bash firefox
 ```
-### Advanced example
+### Advanced examples
 ```sh
-./per-app-crypted-home.bash -- "$SHELL" -c "pwd; ls -la; mount |grep \"$HOME\"; echo \"sleeping 1m so you can try to find this mount in another shell. Hint: it won't be easy.\"; sleep 1m"
+# application arguments with quote example
+./per-app-crypted-home.bash "$SHELL" -c "pwd; ls -la; mount |grep \"$HOME\"; echo \"sleeping 1m so you can try to find this mount in another shell. Hint: it won't be easy.\"; sleep 1m"
+# key file, pipe and return value example
+head -c32 /dev/random > ~/secret_key
+echo "hello world"|./per-app-crypted-home.bash --key-file ~/secret_key -- "$SHELL" -c cat
+# resize shrink example
+./per-app-crypted-home.bash --resize 128M --key-file ~/secret_key -- "$SHELL" -c "df -h ."
+# quiet resize expand example
+./per-app-crypted-home.bash --quiet --resize 512M --key-file ~/secret_key -- "$SHELL" -c "df -h ."
 ```

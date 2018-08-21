@@ -12,7 +12,6 @@ CHOWN="$( which chown )"
 DATE="$( which date )"
 DU="$( which du )"
 FILE="$( which file )"
-FINDMNT="$( which findmnt )"
 FSCK="$( which fsck )"
 GETOPT="$( which getopt )"
 GREP="$( which grep )"
@@ -80,7 +79,7 @@ parse_options() {
     print_usage
     exit 1
   fi
-  OPTS=$( POSIXLY_CORRECT=1 "$GETOPT" --options 'c:f:H:i:k:r:s:t:q:h' --longoptions 'container:,fs-type:,hash:,id:,key-file:,resize:,size:,teardown-timeout,quiet,help' --name "$0" -- "$@" )
+  OPTS=$( POSIXLY_CORRECT=1 "$GETOPT" --options 'c:f:H:i:k:r:s:t:qh' --longoptions 'container:,fs-type:,hash:,id:,key-file:,resize:,size:,teardown-timeout,quiet,help' --name "$0" -- "$@" )
   GETOPT_RETURN_CODE=$?
   if [ "$GETOPT_RETURN_CODE" != "0" ]; then
     print_usage
@@ -97,9 +96,10 @@ parse_options() {
       -r|--resize) shift; [ "$( toBytes "$1")" -gt 0 ] 2>/dev/null && DO_RESIZE="$1" || die "Resize size \"$1\" seems to be invalid";;
       -s|--size) shift; [ "$( toBytes "$1")" -gt 0 ] 2>/dev/null && CONTAINER_SIZE="$1" || die "Container size \"$1\" seems to be invalid";;
       -t|--teardown-timeout) shift; [ "$1" -gt 0 ] 2>/dev/null && TEAR_DOWN_TIMEOUT="$1" || die "Timeout \"$1\" seems to be invalid";;
+      -q|--quiet) QUIET=true;;
       --) shift; APPLICATION="$( which "$1" 2>/dev/null )" || die "Application executable \"$1\" not found or not executable"; shift; APPLICATION_ARGS=( "$@" ); break;;
       -h|--help) print_usage; exit 0;;
-      *) echo "$LOG_PREFIX getopt error" > /dev/stderr; exit 128;;
+      *) echo "$LOG_PREFIX Usage or getopt error" > /dev/stderr; print_usage; exit 1;;
     esac
     shift;
   done
@@ -127,6 +127,7 @@ print_info() {
   echo_if_not_quiet " Container size: $CONTAINER_SIZE"
   echo_if_not_quiet " Container path: $HOMECONTAINER $( [ -e "$HOMECONTAINER" ] && echo "(exists)")"
   echo_if_not_quiet " Mapped dm-crypt path: $DMCRYPTED_HOMECONTAINER $( [ -e "$DMCRYPTED_HOMECONTAINER" ] && echo "(exists)")"
+  [ -n "$KEY_FILE" ] && echo_if_not_quiet " Key file: $KEY_FILE"
 }
 
 escalate_priviledges() {
@@ -183,8 +184,8 @@ luks_format_container() {
   if "$FILE" "$HOMECONTAINER" | grep -q "LUKS encrypted file"; then
     die "Container already contains a LUKS header. Refuse to work"
   fi
-  CMD=( "$CRYPTSETUP" luksFormat "$HOMECONTAINER" --type luks2 --batch-mode --verify-passphrase )
-  [ -n "$LUKS_KEY_FILE_ARG" ] && CMD+=( "$LUKS_KEY_FILE_ARG" );
+  CMD=( "$CRYPTSETUP" luksFormat "$HOMECONTAINER" --type luks2 --batch-mode )
+  [ -n "$LUKS_KEY_FILE_ARG" ] && CMD+=( "$LUKS_KEY_FILE_ARG" ) || CMD+=( "--verify-passphrase" );
   "${CMD[@]}" || die "Couldn't LUKS format container at \"$HOMECONTAINER\""
 }
 
@@ -202,12 +203,14 @@ luks_open_container() {
 mkfs_open_container() {
   echo_if_not_quiet "Format uncrypted container"
   echo_if_not_quiet "Warning: Random data (cause fresh crypted device) seen as filesystem headers may irritate mkfs"
-  "$MKFS.$FS_TYPE" "$DMCRYPTED_HOMECONTAINER" || die "Couldn't create \"$FS_TYPE\" filesystem with \"$(basename "$MKFS.$FS_TYPE")\" for container \"$HOMECONTAINER\""
+  [ -z "$QUIET" ] && MKFS_OUT=/dev/stdout || MKFS_OUT=/dev/null
+  "$MKFS.$FS_TYPE" "$DMCRYPTED_HOMECONTAINER" > "$MKFS_OUT" 2>&1 || die "Couldn't create \"$FS_TYPE\" filesystem with \"$(basename "$MKFS.$FS_TYPE")\" for container \"$HOMECONTAINER\""
 }
 fsck_open_container() {
   echo_if_not_quiet "Filesystem check on open container"
-  if ! "$FSCK.$FS_TYPE" $1 "$DMCRYPTED_HOMECONTAINER"; then
-    die "Container filesystem or fsck tool \"$FSCK.$FS_TYPE\" corrupt"
+  [ -z "$QUIET" ] && FSCK_OUT=/dev/stdout || FSCK_OUT=/dev/null
+  if ! "$FSCK.$FS_TYPE" -y $1 "$DMCRYPTED_HOMECONTAINER" > "$FSCK_OUT" 2>&1; then
+    echo "$LOG_PREFIX Warning: Filesystem check tool \"$FSCK.$FS_TYPE\" failed" > /dev/stderr
   fi
 }
 
@@ -295,13 +298,10 @@ main() {
     fi
     # fsck
     fsck_open_container
-    # close and truncate container if shrink is requested
+    # truncate container if shrink is requested
     if [ "$RESIZE_MODE" = "shrink" ]; then
-      tear_down
       echo_if_not_quiet "Shrinking container file"
       "$TRUNCATE" --size "$DO_RESIZE" "$HOMECONTAINER" || die "Couldn't shrink container at \"$HOMECONTAINER\" to size \"$DO_RESIZE\""
-      echo_if_not_quiet "Shrinking went fine. Bye!"
-      exit 0
     fi
   fi
 
@@ -310,37 +310,28 @@ main() {
 
   # change into new environment
   echo_if_not_quiet "Change into container"
-  # application arguments
-  #if (( ${#APPLICATION_ARGS[@]} > 0 )); then
-  #  UNSHARE_CMDS+=( "${APPLICATION_ARGS[@]}" )
-  #fi
 
-
+  # shell argument escape fun
   APPLICATION_CMD=( "$APPLICATION" )
   APPLICATION_CMD+=( "${APPLICATION_ARGS[@]}" )
   APPLICATION_CMD_SERIALIZED_L1="$( typeset -p APPLICATION_CMD )"
   APPLICATION_CMD_SERIALIZED_L2="$( typeset -p APPLICATION_CMD_SERIALIZED_L1 )"
-  APPLICATION_CMD_SERIALIZED_L3="$( echo "${APPLICATION_CMD_SERIALIZED_L2::-1}" |cut -d'"' -f2- ); \\\"\\\${APPLICATION_CMD[@]}\\\""
+  APPLICATION_CMD_SERIALIZED_L3="$( echo "${APPLICATION_CMD_SERIALIZED_L2::-1}" |cut -d'"' -f2- ); exec \\\"\\\${APPLICATION_CMD[@]}\\\""
 
-  #echo $APPLICATION_CMD_SERIALIZED_L3
-  #exit 52
-  [ "$NEED_FORMAT" = "true" ] && DO_CHOWN=true || DO_CHOWN=false
+  [ "$NEED_FORMAT" = "true" ] && DO_CHOWN="'$CHOWN' '$USER:' '-R' '$HOME'" || DO_CHOWN=
   exec 3< <( cat <<UNSHARE_COMMANDS ;
-set -ex
-"$MOUNT" "$DMCRYPTED_HOMECONTAINER" "$HOME"
-$DO_CHOWN && "$CHOWN" "$USER:" "-R" "$HOME"
-cd "$HOME"
 exec 3<&-
+set -e
+[ -z "$QUIET" ] && set -x
+"$MOUNT" "$DMCRYPTED_HOMECONTAINER" "$HOME"
+$DO_CHOWN
+cd "$HOME"
 exec su "$USER" -s "$BASH" -c "$APPLICATION_CMD_SERIALIZED_L3"
 UNSHARE_COMMANDS
 )
 
-#cat /proc/self/fd/3
-  #exit 52
-
   "$UNSHARE" "${UNSHARE_OPTIONS[@]}" "$BASH" "/proc/self/fd/3"
   UNSHARE_EXIT=$?
-  #"$UNSHARE" $UNSHARE_OPTIONS "$SH" -c "$MOUNT_CMD && exec \"$SU\" -c \"exec \\\"$APPLICATION\\\"\" --preserve-environment \"$USER\""
 
   tear_down
   echo_if_not_quiet "Everything went fine. Bye!"
