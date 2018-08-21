@@ -67,7 +67,7 @@ tear_down() {
   TEAR_DOWN_TIMEOUT_DATE=$(( $("$DATE" +%s) + TEAR_DOWN_TIMEOUT ))
   echo_if_not_quiet "Closing container..."
   while "$CRYPTSETUP" status "$APPLICATION_ID" > /dev/null 2>&1; do
-    "$CRYPTSETUP" close "$APPLICATION_ID"
+    "$CRYPTSETUP" close "$APPLICATION_ID" && echo_if_not_quiet "Successfully close container" || echo_if_not_quiet "Couldn't close container. Retry..."
     if [ "$( "$DATE" +%s )" -ge "$TEAR_DOWN_TIMEOUT_DATE" ]; then
       die "Timed out while trying to close container \"$APPLICATION_ID\"."$'\n'"To close it yourself run following command as root."$'\n'"\"$CRYPTSETUP\" close \"$APPLICATION_ID\""
       false
