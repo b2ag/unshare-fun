@@ -1,6 +1,6 @@
 #!/usr/bin/bash
-# Author: b2ag
 # License: GPL
+# Author: b2ag
 
 # some stupid stuff
 CAT="$( which cat )"
@@ -33,7 +33,7 @@ FS_TYPE=ext4
 TEAR_DOWN_TIMEOUT=10 # Seconds
 QUIET="$QUIET"
 LOG_PREFIX="[$0]"
-UNSHARE_EXTRA_ARGS="--fork --pid --mount-proc"
+UNSHARE_OPTIONS="--kill-child --fork --pid --mount-proc --mount" # --net --ipc
 
 print_usage() {
   echo "Usage: $0 executable [arguments]" > /dev/stderr
@@ -151,10 +151,10 @@ fi
 MOUNT_CMD="$MOUNT_CMD && cd \"$HOME\""
 if (( $# >= 2 )); then
   # first part of this line ensures arguments are handed over properly
-  "$CAT" /proc/$$/cmdline | "$TAIL" -z -n+4 | "$UNSHARE" $UNSHARE_EXTRA_ARGS -m "$SH" -c "$MOUNT_CMD && \"$SU\" -c \"\\\"$XARGS\\\" -0 \\\"$APPLICATION\\\"\" --preserve-environment \"$USER\""
+  "$CAT" /proc/$$/cmdline | "$TAIL" -z -n+4 | "$UNSHARE" $UNSHARE_OPTIONS "$SH" -c "$MOUNT_CMD && exec \"$SU\" -c \"exec \\\"$XARGS\\\" -0 \\\"$APPLICATION\\\"\" --preserve-environment \"$USER\""
 else
   # no extra arguments, pass stdin
-  "$UNSHARE" $UNSHARE_EXTRA_ARGS -m "$SH" -c "$MOUNT_CMD && \"$SU\" -c \"$APPLICATION\" --preserve-environment \"$USER\""
+  "$UNSHARE" $UNSHARE_OPTIONS "$SH" -c "$MOUNT_CMD && exec \"$SU\" -c \"exec \\\"$APPLICATION\\\"\" --preserve-environment \"$USER\""
 fi
 
 tear_down
