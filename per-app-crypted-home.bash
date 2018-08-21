@@ -32,10 +32,11 @@ SIZE_IN_MiB=1024 # MiB
 FS_TYPE=ext4
 TEAR_DOWN_TIMEOUT=10 # Seconds
 QUIET="$QUIET"
-LOG_PREFIX="[$0]: "
+LOG_PREFIX="[$0]"
+UNSHARE_EXTRA_ARGS="--fork --pid --mount-proc"
 
 print_usage() {
-  echo "Usage: $0 executable [arguments...]" > /dev/stderr
+  echo "Usage: $0 executable [arguments]" > /dev/stderr
 }
 
 # check required script parameters
@@ -48,7 +49,7 @@ echo_if_not_quiet() { [ -z "$QUIET" ] && echo "$LOG_PREFIX $@" || true; }
 
 escalate_priviledges() {
   if [ "$( "$ID" -u )" != "0" ]; then
-    echo_if_not_quiet "Need to escalate priviledges..."
+    echo_if_not_quiet "Need to escalate priviledges"
     exec "$SUDO" -E "USER=$USER" "HOME=$HOME" "NEED_FORMAT=$NEED_FORMAT" "QUIET=$QUIET" "$0" "$@"
   fi
   echo "$LOG_PREFIX Something is wrong" > /dev/stderr
@@ -67,9 +68,9 @@ die() {
 # define tear down operation
 tear_down() {
   TEAR_DOWN_TIMEOUT_DATE=$(( $("$DATE" +%s) + TEAR_DOWN_TIMEOUT ))
-  echo_if_not_quiet "Closing container..."
+  echo_if_not_quiet "Closing container"
   while "$CRYPTSETUP" status "$APPLICATION_ID" > /dev/null 2>&1; do
-    "$CRYPTSETUP" close "$APPLICATION_ID" && echo_if_not_quiet "Successfully close container" || echo_if_not_quiet "Couldn't close container. Retry..."
+    "$CRYPTSETUP" close "$APPLICATION_ID" && echo_if_not_quiet "Successfully close container" || echo_if_not_quiet "Couldn't close container. Retry"
     if [ "$( "$DATE" +%s )" -ge "$TEAR_DOWN_TIMEOUT_DATE" ]; then
       die "Timed out while trying to close container \"$APPLICATION_ID\"."$'\n'"To close it yourself run following command as root."$'\n'"\"$CRYPTSETUP\" close \"$APPLICATION_ID\""
       false
@@ -82,7 +83,7 @@ tear_down() {
 
 # prepare (1/4) (create empty file if needed)
 if [ "$( "$ID" -u )" != "0" ] && [ ! -e "$HOMECONTAINER" ]; then
-  echo_if_not_quiet "Create container of size $SIZE_IN_MiB mebibyte..."
+  echo_if_not_quiet "Create container of size $SIZE_IN_MiB mebibyte"
   NEED_FORMAT=true
   "$DD" bs=$((1024*1024)) count=$SIZE_IN_MiB if=/dev/zero "of=$HOMECONTAINER" || die "Couldn't prepare empty container at \"$HOMECONTAINER\""
   escalate_priviledges "$@"
@@ -107,7 +108,7 @@ fi
 
 # prepare (2/4) (LUKS format)
 if [ "$NEED_FORMAT" = "true" ]; then
-  echo_if_not_quiet "LUKS format container..."
+  echo_if_not_quiet "LUKS format container"
   "$CRYPTSETUP" -q luksFormat --type luks2 "$HOMECONTAINER" || die "Couldn't LUKS format container at \"$HOMECONTAINER\""
 elif ! "$FILE" "$HOMECONTAINER" | grep -q "LUKS encrypted file"; then
   die "Container missing LUKS header at \"$HOMECONTAINER\""
@@ -117,7 +118,7 @@ fi
 if [ ! -e "$HOMECONTAINER" ]; then
   die "Couldn't find container at \"$HOMECONTAINER\""
 else
-  echo_if_not_quiet "LUKS open container..."
+  echo_if_not_quiet "LUKS open container"
   "$CRYPTSETUP" open --type luks "$HOMECONTAINER" "$APPLICATION_ID" || die "Couldn't open container \"$HOMECONTAINER\""
 fi
 
@@ -128,18 +129,21 @@ fi
 
 # prepare (4/4) (mkfs if needed)
 if [ "$NEED_FORMAT" = "true" ]; then
-  echo_if_not_quiet "Format uncrypted container..."
+  echo_if_not_quiet "Format uncrypted container"
   echo_if_not_quiet "Warning: Random data (cause fresh crypted device) seen has filesystem headers may irritate mkfs"
   "$MKFS.$FS_TYPE" "$DMCRYPTED_HOMECONTAINER" || die "Couldn't format filesystem \"$FS_TYPE\" with \"$(basename "$MKFS.$FS_TYPE")\" for container \"$HOMECONTAINER\""
-elif ! "$FSCK.$FS_TYPE" "$DMCRYPTED_HOMECONTAINER"; then
-  die "Container filesystem or fsck tool \"$FSCK.$FS_TYPE\" corrupt"
+else
+  echo_if_not_quiet "Filesystem check on uncrypted container"
+  if ! "$FSCK.$FS_TYPE" "$DMCRYPTED_HOMECONTAINER"; then
+    die "Container filesystem or fsck tool \"$FSCK.$FS_TYPE\" corrupt"
+  fi
 fi
 
 # install trap handler
 trap tear_down SIGTERM SIGINT
 
 # change into new environment
-echo_if_not_quiet "Change into container..."
+echo_if_not_quiet "Change into container"
 MOUNT_CMD="\"$MOUNT\" \"$DMCRYPTED_HOMECONTAINER\" \"$HOME\""
 if [ "$NEED_FORMAT" = "true" ]; then
   MOUNT_CMD="$MOUNT_CMD && chown \"$USER:\" -R \"$HOME\""
@@ -147,10 +151,10 @@ fi
 MOUNT_CMD="$MOUNT_CMD && cd \"$HOME\""
 if (( $# >= 2 )); then
   # first part of this line ensures arguments are handed over properly
-  "$CAT" /proc/$$/cmdline | "$TAIL" -z -n+4 | "$UNSHARE" -m "$SH" -c "$MOUNT_CMD && \"$SU\" -c \"\\\"$XARGS\\\" -0 \\\"$APPLICATION\\\"\" --preserve-environment \"$USER\""
+  "$CAT" /proc/$$/cmdline | "$TAIL" -z -n+4 | "$UNSHARE" $UNSHARE_EXTRA_ARGS -m "$SH" -c "$MOUNT_CMD && \"$SU\" -c \"\\\"$XARGS\\\" -0 \\\"$APPLICATION\\\"\" --preserve-environment \"$USER\""
 else
   # no extra arguments, pass stdin
-  "$UNSHARE" -m "$SH" -c "$MOUNT_CMD && \"$SU\" -c \"$APPLICATION\" --preserve-environment \"$USER\""
+  "$UNSHARE" $UNSHARE_EXTRA_ARGS -m "$SH" -c "$MOUNT_CMD && \"$SU\" -c \"$APPLICATION\" --preserve-environment \"$USER\""
 fi
 
 tear_down
