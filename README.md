@@ -17,11 +17,13 @@ Options:
   -f, --fs-type=TYPE              Filesystem type inside container ( default: ext4 )
   -H, --hash=COMMAND              Hash executable used to build application identifier ( default: /usr/bin/sha256sum )
   -i, --id=IDENTIFIER             Used to seperate containers for different applications with same basename ( default: "APP:BASENAME_APP:PATH:HASH" )
+  -k, --key-file=FILE             Use key from FILE instead of passphrase for dm-crypt
   -r, --resize=SIZE               Resize an existing container
   -s, --size=SIZE                 Maximum size of container ( default: 1024M )
   -t, --teardown-timeout=SECONDS  Timeout for closing the container ( default: 10 seconds )
   -q, --quiet                     Suppress extra output
   -h, --help                      Display this help and exits
+
 ```
 ### Simple example
 ```sh
