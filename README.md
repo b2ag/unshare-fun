@@ -31,9 +31,9 @@ Options:
 ```sh
 # application arguments with quote example
 ./per-app-crypted-home.bash "$SHELL" -c "pwd; ls -la; mount |grep \"$HOME\"; echo \"sleeping 1m so you can try to find this mount in another shell. Hint: it won't be easy.\"; sleep 1m"
-# key file, pipe and return value example
+# key file, pipe and exit code example
 head -c32 /dev/random > ~/secret_key
-echo "hello world"|./per-app-crypted-home.bash --key-file ~/secret_key -- "$SHELL" -c cat
+echo "hello world"|./per-app-crypted-home.bash --key-file ~/secret_key -- "$SHELL" -c "cat; exit 42"
 # resize shrink example
 ./per-app-crypted-home.bash --resize 128M --key-file ~/secret_key -- "$SHELL" -c "df -h ."
 # quiet resize expand example
