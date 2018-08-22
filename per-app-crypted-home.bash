@@ -346,7 +346,7 @@ main() {
   unshare_net_hook() { "$@"; }
   if [ "$NET_FUN" = "true" ]; then
     NET_NAME="${APPLICATION_ID:0:8}${APPLICATION_ID:(-7)}"
-    echo "NET_NAME=$NET_NAME"
+    #echo "NET_NAME=$NET_NAME"
     NET_MOUNT_POINT="$XDG_RUNTIME_DIR/net-$NET_NAME"
     touch "$NET_MOUNT_POINT"
     "$UNSHARE" "--net=$NET_MOUNT_POINT" -pf --kill-child true
@@ -390,7 +390,7 @@ UNSHARE_COMMANDS
     net_fun_daemon() {
       while ! ip -6 addr show "$NET_NAME" |grep -q "UP,LOWER_UP" 2>/dev/null; do sleep 1; done
       HOST_IP6="$( ip -6 addr show $NET_NAME |grep -oE "inet6 [0-9a-f:]+"| cut -d' ' -f2- )"
-      echo "HOST_IP6=$HOST_IP6"
+      #echo "HOST_IP6=$HOST_IP6"
       UNSHARE_PID="$(pgrep -P "$MAIN_PROCESS_PID" )"
       socat tcp6-listen:100,so-bindtodevice=$NET_NAME,reuseaddr,fork unix-connect:/tmp/.X11-unix/X0 & SOCAT_PID11=$!
       #socat tcp6-listen:101,so-bindtodevice=$NET_NAME,reuseaddr,fork unix-connect:/tmp/.X11-unix/1018 & SOCAT_PID21=$!
