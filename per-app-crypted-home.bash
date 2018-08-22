@@ -388,7 +388,7 @@ UNSHARE_COMMANDS
       HOST_IP6="$( ip -6 addr show $NET_NAME |grep -oE "inet6 [0-9a-f:]+"| cut -d' ' -f2- )"
       echo "HOST_IP6=$HOST_IP6"
       UNSHARE_PID="$(pgrep -P "$MAIN_PROCESS_PID" )"
-      socat tcp6-listen:6000,so-bindtodevice=$NET_NAME,reuse unix-connect:/tmp/.X11-unix/X0 & SOCAT_PID1=$!
+      socat tcp6-listen:6000,so-bindtodevice=$NET_NAME,reuseaddr,fork unix-connect:/tmp/.X11-unix/X0 & SOCAT_PID1=$!
       nsenter -at $UNSHARE_PID -- mkdir /tmp/.X11-unix/
       nsenter -at $UNSHARE_PID -- socat unix-listen:/tmp/.X11-unix/X0,fork "tcp6-connect:[$HOST_IP6%$NET_NAME]:6000" & SOCAT_PID2="$(pgrep -P "$!" )"
       nsenter -at $UNSHARE_PID -- chown "$USER:" -R /tmp/.X11-unix/
