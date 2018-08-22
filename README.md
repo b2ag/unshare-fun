@@ -18,16 +18,20 @@ Options:
   -H, --hash=COMMAND              Hash executable used to build application identifier ( default: /usr/bin/sha256sum )
   -i, --id=IDENTIFIER             Used to seperate containers for different applications with same basename ( default: "APP:BASENAME_APP:PATH:HASH" )
   -k, --key-file=FILE             Use key from FILE instead of passphrase for dm-crypt
+  -n, --nat                       Setup NAT for internet access
   -r, --resize=SIZE               Resize an existing container
   -s, --size=SIZE                 Maximum size of container ( default: 1024M )
-  -t, --teardown-timeout=SECONDS  Timeout for closing the container ( default: 10 seconds )
+  --skip-ipc                      Skip IPC virtualisation
+  --skip-network                  Skip network virtualisation
+  --skip-uts                      Skip UTS (hostname) virtualisation
+  -t, --tcpdump                   Dump reduced version of network traffic with tcpdump
+  --teardown-timeout=SECONDS      Timeout for closing the container ( default: 10 seconds )
   -q, --quiet                     Suppress extra output
   -h, --help                      Display this help and exits
-
 ```
 ### Simple example
 ```sh
-./per-app-crypted-home.bash firefox
+./per-app-crypted-home.bash --nat firefox
 ```
 ### Advanced examples
 ```sh
@@ -40,4 +44,6 @@ echo "hello world"|./per-app-crypted-home.bash --key-file ~/secret_key -- "$SHEL
 ./per-app-crypted-home.bash --resize 128M --key-file ~/secret_key -- "$SHELL" -c "df -h ."
 # quiet resize expand example
 ./per-app-crypted-home.bash --quiet --resize 512M --key-file ~/secret_key -- "$SHELL" -c "df -h ."
+# capture ip activities (currently only TCP SYN/FIN, all udp and all icmp)
+./per-app-crypted-home.bash --nat --tcpdump --key-file ~/secret_key chromium
 ```

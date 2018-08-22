@@ -16,8 +16,10 @@ FSCK="$( which fsck )"
 GETOPT="$( which getopt )"
 GREP="$( which grep )"
 ID="$( which id )"
+IP="$( which ip )"
 MKFS="$( which mkfs )"
 MOUNT="$( which mount )"
+NSENTER="$( which nsenter )"
 RESIZE2FS="$( which resize2fs )"
 RM="$( which rm )"
 SED="$( which sed )"
@@ -27,6 +29,7 @@ STAT="$( which stat )"
 SU="$( which su )"
 SUDO="$( which sudo )"
 TAIL="$( which tail )"
+TIMEOUT="$( which timeout )"
 TRUNCATE="$( which truncate )"
 UNSHARE="$( which unshare )"
 XARGS="$( which xargs )"
@@ -47,8 +50,16 @@ TEAR_DOWN_TIMEOUT=10 # Seconds
 QUIET=
 LOG_PREFIX="[$0]"
 UNSHARE_OPTIONS=( --kill-child --fork --pid --mount-proc --mount ) # --net --ipc
+DO_NAT=
 DO_RESIZE=
-EXTRA_SANBOXING=
+SKIP_IPC=
+SKIP_NETWORK=
+SKIP_UTS=
+VETH_LUCKYNR=$(( ( RANDOM % 128 )  + 32 ))
+VETH_HOST_IP4="192.168.$VETH_LUCKYNR.1"
+VETH_VM_IP4="192.168.$VETH_LUCKYNR.2"
+VETH_SUBNET4="24"
+TCPDUMP_LOGGING=
 
 print_usage() {
   cat <<USAGE > /dev/stderr
@@ -63,11 +74,15 @@ Options:
   -H, --hash=COMMAND              Hash executable used to build application identifier ( default: $HASHCMD )
   -i, --id=IDENTIFIER             Used to seperate containers for different applications with same basename ( default: "APP:BASENAME_APP:PATH:HASH" )
   -k, --key-file=FILE             Use key from FILE instead of passphrase for dm-crypt
+  -n, --nat                       Setup NAT for internet access
   -r, --resize=SIZE               Resize an existing container
   -s, --size=SIZE                 Maximum size of container ( default: $CONTAINER_SIZE )
-  -t, --teardown-timeout=SECONDS  Timeout for closing the container ( default: $TEAR_DOWN_TIMEOUT seconds )
+  --skip-ipc                      Skip IPC virtualisation
+  --skip-network                  Skip network virtualisation
+  --skip-uts                      Skip UTS (hostname) virtualisation
+  -t, --tcpdump                   Dump reduced version of network traffic with tcpdump
+  --teardown-timeout=SECONDS      Timeout for closing the container ( default: $TEAR_DOWN_TIMEOUT seconds )
   -q, --quiet                     Suppress extra output
-  -x, --extra-sandboxing          Some experimental sandbox commands
   -h, --help                      Display this help and exits
 
 USAGE
@@ -81,7 +96,7 @@ parse_options() {
     print_usage
     exit 1
   fi
-  OPTS=$( POSIXLY_CORRECT=1 "$GETOPT" --options 'c:f:H:i:k:r:s:t:qxh' --longoptions 'container:,fs-type:,hash:,id:,key-file:,resize:,size:,teardown-timeout,quiet,extra-sandboxing,help' --name "$0" -- "$@" )
+  OPTS=$( POSIXLY_CORRECT=1 "$GETOPT" --options 'c:f:H:i:k:nr:s:tqxh' --longoptions 'container:,fs-type:,hash:,id:,key-file:,nat,resize:,size:,skip-ipc,skip-network,skip-uts,tcpdump,teardown-timeout:,quiet,extra-sandboxing,help' --name "$0" -- "$@" )
   GETOPT_RETURN_CODE=$?
   if [ "$GETOPT_RETURN_CODE" != "0" ]; then
     print_usage
@@ -95,11 +110,15 @@ parse_options() {
       -H|--hash) shift; HASHCMD="$( which "$1" 2>/dev/null )" || die "Hash executable \"$1\" not found or not executable";;
       -i|--id) shift; USER_APPLICATION_ID="$1";;
       -k|--key-file) shift; KEY_FILE="$1";;
+      -n|--nat) DO_NAT=true;;
       -r|--resize) shift; [ "$( toBytes "$1")" -gt 0 ] 2>/dev/null && DO_RESIZE="$1" || die "Resize size \"$1\" seems to be invalid";;
       -s|--size) shift; [ "$( toBytes "$1")" -gt 0 ] 2>/dev/null && CONTAINER_SIZE="$1" || die "Container size \"$1\" seems to be invalid";;
-      -t|--teardown-timeout) shift; [ "$1" -gt 0 ] 2>/dev/null && TEAR_DOWN_TIMEOUT="$1" || die "Timeout \"$1\" seems to be invalid";;
+      --skip-ipc) SKIP_IPC=true;;
+      --skip-network) SKIP_NETWORK=true;;
+      --skip-uts) SKIP_UTS=true;;
+      -t|--tcpdump) TCPDUMP_LOGGING=true;;
+      --teardown-timeout) shift; [ "$1" -gt 0 ] 2>/dev/null && TEAR_DOWN_TIMEOUT="$1" || die "Timeout \"$1\" seems to be invalid";;
       -q|--quiet) QUIET=true;;
-      -x|--extra-sandboxing) EXTRA_SANBOXING=true;;
       --) shift; APPLICATION="$( which "$1" 2>/dev/null )" || die "Application executable \"$1\" not found or not executable"; shift; APPLICATION_ARGS=( "$@" ); break;;
       -h|--help) print_usage; exit 0;;
       *) echo "$LOG_PREFIX Usage or getopt error" > /dev/stderr; print_usage; exit 1;;
@@ -171,8 +190,6 @@ tear_down() {
       false
       return
     fi
-    ## FIXME nasty net fun
-    ##pkill -P $( pgrep -P $$ nsenter ) socat 2>/dev/null
     "$SLEEP" 2
   done
   true
@@ -325,30 +342,38 @@ main() {
   APPLICATION_CMD_SERIALIZED_L2="$( typeset -p APPLICATION_CMD_SERIALIZED_L1 )"
   APPLICATION_CMD_SERIALIZED_L3="$( echo "${APPLICATION_CMD_SERIALIZED_L2::-1}" |cut -d'"' -f2- ); exec \\\"\\\${APPLICATION_CMD[@]}\\\""
 
+  # TODO overwrite by cmdline option
   NET_NAME="${APPLICATION_ID:0:8}${APPLICATION_ID:(-7)}"
 
-  [ "$NEED_FORMAT" = "true" ] && DO_CHOWN="'$CHOWN' '$USER:' '-R' '$HOME'" || DO_CHOWN=
-  if [ "$EXTRA_SANBOXING" = "true" ]; then
-    NET_FUN=true
-    xhost si:localuser:$USER # not to forget to punch holes in our sandbox
-    EXTRA_SANBOXING_CMDS="hostname '$NET_NAME'"
-    UNSHARE_OPTIONS+=("--uts")
+  CHOWN_CMD=
+  if [ "$NEED_FORMAT" = "true" ]; then
+    CHOWN_CMD="'$CHOWN' '$USER:' '-R' '$HOME'"
+  fi
+
+  if [ "$SKIP_IPC" != "true" ]; then
     UNSHARE_OPTIONS+=("--ipc")
-  else
-    EXTRA_SANBOXING_CMDS=
+  fi
+
+  # FIXME really not sure how to handle that problem
+  xhost si:localuser:$USER # not to forget to punch holes in our sandbox
+
+  UTS_CMDS=
+  if [ "$SKIP_UTS" != "true" ]; then
+    UTS_CMDS="hostname '$NET_NAME'"
+    UNSHARE_OPTIONS+=("--uts")
   fi
 
   unshare_net_hook() { "$@"; }
-  if [ "$NET_FUN" = "true" ]; then
+  if [ "$SKIP_NETWORK" != "true" ]; then
     #echo "NET_NAME=$NET_NAME"
     NET_MOUNT_POINT="$XDG_RUNTIME_DIR/net-$NET_NAME"
     touch "$NET_MOUNT_POINT"
     "$UNSHARE" "--net=$NET_MOUNT_POINT" -pf --kill-child true
-    ip link add "$NET_NAME" type veth peer name "$NET_NAME" netns "$NET_MOUNT_POINT"
-    ip link set "$NET_NAME" up
+    "$IP" link add "$NET_NAME" type veth peer name "$NET_NAME" netns "$NET_MOUNT_POINT"
+    "$IP" link set "$NET_NAME" up
     TEAR_DOWN_EXTRA_CMDS="$TEAR_DOWN_EXTRA_CMDS; umount '$NET_MOUNT_POINT'; rm '$NET_MOUNT_POINT'"
-    EXTRA_SANBOXING_CMDS="$EXTRA_SANBOXING_CMDS && ip link set dev $NET_NAME up"
-    EXTRA_SANBOXING_CMDS="$EXTRA_SANBOXING_CMDS && ip link set dev lo up"
+    NETWORK_SETUP_CMDS="'$IP' link set dev $NET_NAME up"
+    NETWORK_SETUP_CMDS="$NETWORK_SETUP_CMDS && '$IP' link set dev lo up"
     unshare_net_hook() { nsenter "--net=$NET_MOUNT_POINT" "$@"; }
   fi
 
@@ -356,9 +381,10 @@ main() {
 exec 3<&-
 set -e
 [ -z "$QUIET" ] && set -x
-$EXTRA_SANBOXING_CMDS
+$NETWORK_SETUP_CMDS
+$UTS_CMDS
 "$MOUNT" "$DMCRYPTED_HOMECONTAINER" "$HOME"
-$DO_CHOWN
+$CHOWN_CMD
 cd "$HOME"
 exec su "$USER" --preserve-environment -s "$BASH" -c "$APPLICATION_CMD_SERIALIZED_L3"
 UNSHARE_COMMANDS
@@ -377,24 +403,37 @@ UNSHARE_COMMANDS
     exit $UNSHARE_EXIT
   } & MAIN_PROCESS_PID=$!
 
-  if [ "$NET_FUN" = "true" ]; then
-    net_fun_daemon() {
-      timeout 10s "$BASH" -c "while ! ip -6 addr show "$NET_NAME" |grep -q 'UP,LOWER_UP' 2>/dev/null; do sleep 1; done"
-      HOST_IP6="$( ip -6 addr show $NET_NAME |grep -oE "inet6 [0-9a-f:]+"| cut -d' ' -f2- )"
-      #echo "HOST_IP6=$HOST_IP6"
-      UNSHARE_PID="$(pgrep -P "$MAIN_PROCESS_PID" )"
-      #socat tcp6-listen:6000,so-bindtodevice=$NET_NAME,reuseaddr,fork unix-connect:/tmp/.X11-unix/X0 & SOCAT_PID11=$!
-      #nsenter -at $UNSHARE_PID -- mkdir /tmp/.X11-unix/
-      #nsenter -at $UNSHARE_PID -- socat unix-listen:/tmp/.X11-unix/X0,fork "tcp6-connect:[$HOST_IP6%$NET_NAME]:6000" & SOCAT_PID12="$( sleep 1; pgrep -P "$!" )"
-      #nsenter -at $UNSHARE_PID -- chown "$USER:" -R /tmp/.X11-unix/
-      #echo "[$HOST_IP6%$NET_NAME]:6000"
-      wait $MAIN_PROCESS_EXIT_HELPER_PID
-      #kill $SOCAT_PID11 $SOCAT_PID12 #$SOCAT_PID21 $SOCAT_PID22
-    }
-    net_fun_daemon
-    #net_fun_daemon & NET_FUN_DAEMON_PID=$!
+  DAEMON_PIDS=
+
+  if [ "$SKIP_NETWORK" != "true" ]; then
+    timeout 10s "$BASH" -c "while ! '$IP' -6 addr show '$NET_NAME' |'$GREP' -q 'UP,LOWER_UP' 2>/dev/null; do sleep 1; done"
+    HOST_IP6="$( "$IP" -6 addr show "$NET_NAME" |"$GREP" -oE "inet6 [0-9a-f:]+"| "$CUT" -d' ' -f2- )"
+    #echo "HOST_IP6=$HOST_IP6"
+    UNSHARE_PID="$(pgrep -P "$MAIN_PROCESS_PID" )"
+    # ip6
+    "$NSENTER" -at $UNSHARE_PID -- "$IP" route add default via "$HOST_IP6" dev "$NET_NAME"
+    # ip4
+    "$IP" address add "$VETH_HOST_IP4/$VETH_SUBNET4" dev "$NET_NAME"
+    "$NSENTER" -at $UNSHARE_PID -- "$IP" address add "$VETH_VM_IP4/$VETH_SUBNET4" dev "$NET_NAME"
+    # container ip masquerading
+    echo 1 > "/proc/sys/net/ipv4/conf/$NET_NAME/forwarding"
+    "$NSENTER" -at $UNSHARE_PID -- "$IP" route add default via "$VETH_HOST_IP4" dev "$NET_NAME"
+    if [ "$DO_NAT" = "true" ]; then
+      # host ip masquerading
+      HOST_DEFAULT_ROUTE_INTERFACE="$( "$IP" route show default |"$GREP" -o " dev [^ ]*"|"$CUT" -d' ' -f3- )"
+      echo 1 > "/proc/sys/net/ipv4/conf/$HOST_DEFAULT_ROUTE_INTERFACE/forwarding"
+      iptables -t nat -C POSTROUTING -o $HOST_DEFAULT_ROUTE_INTERFACE -j MASQUERADE 2>/dev/null || \
+      iptables -t nat -A POSTROUTING -o $HOST_DEFAULT_ROUTE_INTERFACE -j MASQUERADE
+    fi
+    # capture tcp syn&fin, all udp and all icmp
+    if [ "$TCPDUMP_LOGGING" = "true" ]; then
+      tcpdump -ni "$NET_NAME" -w "$NET_NAME.$(date +"%Y%m%d%H%M").pcap" "tcp[tcpflags] & (tcp-syn|tcp-fin) != 0 or udp or icmp" & DAEMON_PIDS="$DAEMON_PIDS $!"
+    fi
   fi
 
+  # wait for tear down
+  wait $MAIN_PROCESS_EXIT_HELPER_PID
+  [ -n "$DAEMON_PIDS" ] && kill $DAEMON_PIDS
   wait $MAIN_PROCESS_PID
 }
 
