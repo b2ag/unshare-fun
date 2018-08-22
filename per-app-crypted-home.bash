@@ -325,27 +325,22 @@ main() {
   APPLICATION_CMD_SERIALIZED_L2="$( typeset -p APPLICATION_CMD_SERIALIZED_L1 )"
   APPLICATION_CMD_SERIALIZED_L3="$( echo "${APPLICATION_CMD_SERIALIZED_L2::-1}" |cut -d'"' -f2- ); exec \\\"\\\${APPLICATION_CMD[@]}\\\""
 
+  NET_NAME="${APPLICATION_ID:0:8}${APPLICATION_ID:(-7)}"
+
   [ "$NEED_FORMAT" = "true" ] && DO_CHOWN="'$CHOWN' '$USER:' '-R' '$HOME'" || DO_CHOWN=
   if [ "$EXTRA_SANBOXING" = "true" ]; then
-    TMP_UNIX=false # does not work that way
     NET_FUN=true
-    $TMP_UNIX && mkdir -p "$HOME/$APPLICATION_ID-unix" && chown "$USER:" -R "$HOME/$APPLICATION_ID-unix" && cp -r /tmp/.*-unix "$HOME/$APPLICATION_ID-unix"
-    DO_EXTRA_SANBOXING1="'$MOUNT' -t tmpfs tmpfs /tmp"
-    if [ -n "$XAUTHORITY" ]; then
-      exec 4< "$XAUTHORITY"
-      DO_EXTRA_SANBOXING2="cat /proc/self/fd/4 > '$XAUTHORITY' && exec 4<&- "
-    fi
-    $TMP_UNIX && DO_EXTRA_SANBOXING1="$DO_EXTRA_SANBOXING1 && cp -r '$HOME/$APPLICATION_ID-unix/.'*-unix /tmp && chown '$USER:' -R /tmp/.*-unix "
-    $TMP_UNIX && TEAR_DOWN_EXTRA_CMDS="$TEAR_DOWN_EXTRA_CMDS && rm -rf '$HOME/$APPLICATION_ID-unix'"
+    xhost si:localuser:$USER # not to forget to punch holes in our sandbox
+    EXTRA_SANBOXING_CMDS="true"
+    EXTRA_SANBOXING_CMDS="$EXTRA_SANBOXING_CMDS && hostname '$NET_NAME'"
+    UNSHARE_OPTIONS+=("--uts")
     UNSHARE_OPTIONS+=("--ipc")
   else
-    DO_EXTRA_SANBOXING1=
-    DO_EXTRA_SANBOXING2=
+    EXTRA_SANBOXING_CMDS=
   fi
 
   unshare_net_hook() { "$@"; }
   if [ "$NET_FUN" = "true" ]; then
-    NET_NAME="${APPLICATION_ID:0:8}${APPLICATION_ID:(-7)}"
     #echo "NET_NAME=$NET_NAME"
     NET_MOUNT_POINT="$XDG_RUNTIME_DIR/net-$NET_NAME"
     touch "$NET_MOUNT_POINT"
@@ -353,10 +348,8 @@ main() {
     ip link add "$NET_NAME" type veth peer name "$NET_NAME" netns "$NET_MOUNT_POINT"
     ip link set "$NET_NAME" up
     TEAR_DOWN_EXTRA_CMDS="$TEAR_DOWN_EXTRA_CMDS; umount '$NET_MOUNT_POINT'; rm '$NET_MOUNT_POINT'"
-    DO_EXTRA_SANBOXING1="$DO_EXTRA_SANBOXING1 && ip link set dev $NET_NAME up"
-    DO_EXTRA_SANBOXING1="$DO_EXTRA_SANBOXING1 && ip link set dev lo up"
-    DO_EXTRA_SANBOXING1="$DO_EXTRA_SANBOXING1 && hostname '$NET_NAME'"
-    UNSHARE_OPTIONS+=("--uts")
+    EXTRA_SANBOXING_CMDS="$EXTRA_SANBOXING_CMDS && ip link set dev $NET_NAME up"
+    EXTRA_SANBOXING_CMDS="$EXTRA_SANBOXING_CMDS && ip link set dev lo up"
     unshare_net_hook() { nsenter "--net=$NET_MOUNT_POINT" "$@"; }
   fi
 
@@ -364,10 +357,9 @@ main() {
 exec 3<&-
 set -e
 [ -z "$QUIET" ] && set -x
-$DO_EXTRA_SANBOXING1
+$EXTRA_SANBOXING_CMDS
 "$MOUNT" "$DMCRYPTED_HOMECONTAINER" "$HOME"
 $DO_CHOWN
-$DO_EXTRA_SANBOXING2
 cd "$HOME"
 exec su "$USER" -s "$BASH" -c "$APPLICATION_CMD_SERIALIZED_L3"
 UNSHARE_COMMANDS
@@ -388,18 +380,15 @@ UNSHARE_COMMANDS
 
   if [ "$NET_FUN" = "true" ]; then
     net_fun_daemon() {
-      while ! ip -6 addr show "$NET_NAME" |grep -q "UP,LOWER_UP" 2>/dev/null; do sleep 1; done
+      timeout 10s "$BASH" -c "while ! ip -6 addr show "$NET_NAME" |grep -q 'UP,LOWER_UP' 2>/dev/null; do sleep 1; done"
       HOST_IP6="$( ip -6 addr show $NET_NAME |grep -oE "inet6 [0-9a-f:]+"| cut -d' ' -f2- )"
       #echo "HOST_IP6=$HOST_IP6"
       UNSHARE_PID="$(pgrep -P "$MAIN_PROCESS_PID" )"
-      socat tcp6-listen:100,so-bindtodevice=$NET_NAME,reuseaddr,fork unix-connect:/tmp/.X11-unix/X0 & SOCAT_PID11=$!
-      #socat tcp6-listen:101,so-bindtodevice=$NET_NAME,reuseaddr,fork unix-connect:/tmp/.X11-unix/1018 & SOCAT_PID21=$!
-      nsenter -at $UNSHARE_PID -- mkdir /tmp/.X11-unix/
-      #nsenter -at $UNSHARE_PID -- mkdir /tmp/.ICE-unix/
-      nsenter -at $UNSHARE_PID -- socat unix-listen:/tmp/.X11-unix/X0,fork "tcp6-connect:[$HOST_IP6%$NET_NAME]:100" & SOCAT_PID12="$( sleep 1; pgrep -P "$!" )"
-      #nsenter -at $UNSHARE_PID -- socat unix-listen:/tmp/.ICE-unix/1018,fork "tcp6-connect:[$HOST_IP6%$NET_NAME]:101" & SOCAT_PID22="$( sleep 1; pgrep -P "$!" )"
-      nsenter -at $UNSHARE_PID -- chown "$USER:" -R /tmp/.X11-unix/
-      #nsenter -at $UNSHARE_PID -- chown "$USER:" -R /tmp/.ICE-unix/
+      #socat tcp6-listen:6000,so-bindtodevice=$NET_NAME,reuseaddr,fork unix-connect:/tmp/.X11-unix/X0 & SOCAT_PID11=$!
+      #nsenter -at $UNSHARE_PID -- mkdir /tmp/.X11-unix/
+      #nsenter -at $UNSHARE_PID -- socat unix-listen:/tmp/.X11-unix/X0,fork "tcp6-connect:[$HOST_IP6%$NET_NAME]:6000" & SOCAT_PID12="$( sleep 1; pgrep -P "$!" )"
+      #nsenter -at $UNSHARE_PID -- chown "$USER:" -R /tmp/.X11-unix/
+      #echo "[$HOST_IP6%$NET_NAME]:6000"
       wait $MAIN_PROCESS_EXIT_HELPER_PID
       kill $SOCAT_PID11 $SOCAT_PID12 #$SOCAT_PID21 $SOCAT_PID22
     }
