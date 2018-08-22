@@ -331,8 +331,7 @@ main() {
   if [ "$EXTRA_SANBOXING" = "true" ]; then
     NET_FUN=true
     xhost si:localuser:$USER # not to forget to punch holes in our sandbox
-    EXTRA_SANBOXING_CMDS="true"
-    EXTRA_SANBOXING_CMDS="$EXTRA_SANBOXING_CMDS && hostname '$NET_NAME'"
+    EXTRA_SANBOXING_CMDS="hostname '$NET_NAME'"
     UNSHARE_OPTIONS+=("--uts")
     UNSHARE_OPTIONS+=("--ipc")
   else
@@ -390,7 +389,7 @@ UNSHARE_COMMANDS
       #nsenter -at $UNSHARE_PID -- chown "$USER:" -R /tmp/.X11-unix/
       #echo "[$HOST_IP6%$NET_NAME]:6000"
       wait $MAIN_PROCESS_EXIT_HELPER_PID
-      kill $SOCAT_PID11 $SOCAT_PID12 #$SOCAT_PID21 $SOCAT_PID22
+      #kill $SOCAT_PID11 $SOCAT_PID12 #$SOCAT_PID21 $SOCAT_PID22
     }
     net_fun_daemon
     #net_fun_daemon & NET_FUN_DAEMON_PID=$!
