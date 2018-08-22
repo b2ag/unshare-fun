@@ -48,6 +48,7 @@ QUIET=
 LOG_PREFIX="[$0]"
 UNSHARE_OPTIONS=( --kill-child --fork --pid --mount-proc --mount ) # --net --ipc
 DO_RESIZE=
+EXTRA_SANBOXING=
 
 print_usage() {
   cat <<USAGE > /dev/stderr
@@ -66,6 +67,7 @@ Options:
   -s, --size=SIZE                 Maximum size of container ( default: $CONTAINER_SIZE )
   -t, --teardown-timeout=SECONDS  Timeout for closing the container ( default: $TEAR_DOWN_TIMEOUT seconds )
   -q, --quiet                     Suppress extra output
+  -x, --extra-sandboxing          Some experimental sandbox commands
   -h, --help                      Display this help and exits
 
 USAGE
@@ -79,7 +81,7 @@ parse_options() {
     print_usage
     exit 1
   fi
-  OPTS=$( POSIXLY_CORRECT=1 "$GETOPT" --options 'c:f:H:i:k:r:s:t:qh' --longoptions 'container:,fs-type:,hash:,id:,key-file:,resize:,size:,teardown-timeout,quiet,help' --name "$0" -- "$@" )
+  OPTS=$( POSIXLY_CORRECT=1 "$GETOPT" --options 'c:f:H:i:k:r:s:t:qxh' --longoptions 'container:,fs-type:,hash:,id:,key-file:,resize:,size:,teardown-timeout,quiet,extra-sandboxing,help' --name "$0" -- "$@" )
   GETOPT_RETURN_CODE=$?
   if [ "$GETOPT_RETURN_CODE" != "0" ]; then
     print_usage
@@ -97,6 +99,7 @@ parse_options() {
       -s|--size) shift; [ "$( toBytes "$1")" -gt 0 ] 2>/dev/null && CONTAINER_SIZE="$1" || die "Container size \"$1\" seems to be invalid";;
       -t|--teardown-timeout) shift; [ "$1" -gt 0 ] 2>/dev/null && TEAR_DOWN_TIMEOUT="$1" || die "Timeout \"$1\" seems to be invalid";;
       -q|--quiet) QUIET=true;;
+      -x|--extra-sandboxing) EXTRA_SANBOXING=true;;
       --) shift; APPLICATION="$( which "$1" 2>/dev/null )" || die "Application executable \"$1\" not found or not executable"; shift; APPLICATION_ARGS=( "$@" ); break;;
       -h|--help) print_usage; exit 0;;
       *) echo "$LOG_PREFIX Usage or getopt error" > /dev/stderr; print_usage; exit 1;;
@@ -156,7 +159,9 @@ die() {
 }
 
 # define tear down operation
+TEAR_DOWN_EXTRA_CMDS="true"
 tear_down() {
+  eval "$TEAR_DOWN_EXTRA_CMDS"
   TEAR_DOWN_TIMEOUT_DATE=$(( $("$DATE" +%s) + TEAR_DOWN_TIMEOUT ))
   echo_if_not_quiet "Closing container"
   while "$CRYPTSETUP" status "$APPLICATION_ID" > /dev/null 2>&1; do
@@ -166,6 +171,8 @@ tear_down() {
       false
       return
     fi
+    ## FIXME nasty net fun
+    ##pkill -P $( pgrep -P $$ nsenter ) socat 2>/dev/null
     "$SLEEP" 2
   done
   true
@@ -319,23 +326,79 @@ main() {
   APPLICATION_CMD_SERIALIZED_L3="$( echo "${APPLICATION_CMD_SERIALIZED_L2::-1}" |cut -d'"' -f2- ); exec \\\"\\\${APPLICATION_CMD[@]}\\\""
 
   [ "$NEED_FORMAT" = "true" ] && DO_CHOWN="'$CHOWN' '$USER:' '-R' '$HOME'" || DO_CHOWN=
+  if [ "$EXTRA_SANBOXING" = "true" ]; then
+    TMP_UNIX=false # does not work that way
+    NET_FUN=true
+    $TMP_UNIX && mkdir -p "$HOME/$APPLICATION_ID-unix" && chown "$USER:" -R "$HOME/$APPLICATION_ID-unix" && cp -r /tmp/.*-unix "$HOME/$APPLICATION_ID-unix"
+    DO_EXTRA_SANBOXING1="'$MOUNT' -t tmpfs tmpfs /tmp"
+    if [ -n "$XAUTHORITY" ]; then
+      exec 4< "$XAUTHORITY"
+      DO_EXTRA_SANBOXING2="cat /proc/self/fd/4 > '$XAUTHORITY' && exec 4<&- "
+    fi
+    $TMP_UNIX && DO_EXTRA_SANBOXING1="$DO_EXTRA_SANBOXING1 && cp -r '$HOME/$APPLICATION_ID-unix/.'*-unix /tmp && chown '$USER:' -R /tmp/.*-unix "
+    $TMP_UNIX && TEAR_DOWN_EXTRA_CMDS="$TEAR_DOWN_EXTRA_CMDS && rm -rf '$HOME/$APPLICATION_ID-unix'"
+    UNSHARE_OPTIONS+=("--ipc")
+  else
+    DO_EXTRA_SANBOXING1=
+    DO_EXTRA_SANBOXING2=
+  fi
+
+  unshare_net_hook() { "$@"; }
+  if [ "$NET_FUN" = "true" ]; then
+    NET_NAME="${APPLICATION_ID:0:8}${APPLICATION_ID:(-7)}"
+    echo "NET_NAME=$NET_NAME"
+    NET_MOUNT_POINT="$XDG_RUNTIME_DIR/net-$NET_NAME"
+    touch "$NET_MOUNT_POINT"
+    "$UNSHARE" "--net=$NET_MOUNT_POINT" -pf --kill-child true
+    ip link add "$NET_NAME" type veth peer name "$NET_NAME" netns "$NET_MOUNT_POINT"
+    ip link set "$NET_NAME" up
+    TEAR_DOWN_EXTRA_CMDS="$TEAR_DOWN_EXTRA_CMDS; umount '$NET_MOUNT_POINT'; rm '$NET_MOUNT_POINT'"
+    DO_EXTRA_SANBOXING1="$DO_EXTRA_SANBOXING1 && ip link set dev $NET_NAME up"
+    DO_EXTRA_SANBOXING1="$DO_EXTRA_SANBOXING1 && ip link set dev lo up"
+    DO_EXTRA_SANBOXING1="$DO_EXTRA_SANBOXING1 && hostname '$NET_NAME'"
+    UNSHARE_OPTIONS+=("--uts")
+    unshare_net_hook() { nsenter "--net=$NET_MOUNT_POINT" "$@"; }
+  fi
+
   exec 3< <( cat <<UNSHARE_COMMANDS ;
 exec 3<&-
 set -e
 [ -z "$QUIET" ] && set -x
+$DO_EXTRA_SANBOXING1
 "$MOUNT" "$DMCRYPTED_HOMECONTAINER" "$HOME"
 $DO_CHOWN
+$DO_EXTRA_SANBOXING2
 cd "$HOME"
 exec su "$USER" -s "$BASH" -c "$APPLICATION_CMD_SERIALIZED_L3"
 UNSHARE_COMMANDS
 )
+  exec 6<&0
+  exec < /dev/null
+  {
+    unshare_net_hook "$UNSHARE" "${UNSHARE_OPTIONS[@]}" "$BASH" "/proc/self/fd/3" < /proc/self/fd/6
+    UNSHARE_EXIT=$?
+    tear_down
+    echo_if_not_quiet "Everything went fine. Bye!"
+    exit $UNSHARE_EXIT
+  } & MAIN_PROCESS_PID=$!
 
-  "$UNSHARE" "${UNSHARE_OPTIONS[@]}" "$BASH" "/proc/self/fd/3"
-  UNSHARE_EXIT=$?
+  if [ "$NET_FUN" = "true" ]; then
+    net_fun_daemon() {
+      while ! ip -6 addr show "$NET_NAME" |grep -q "UP,LOWER_UP" 2>/dev/null; do sleep 1; done
+      HOST_IP6="$( ip -6 addr show $NET_NAME |grep -oE "inet6 [0-9a-f:]+"| cut -d' ' -f2- )"
+      echo "HOST_IP6=$HOST_IP6"
+      UNSHARE_PID="$(pgrep -P "$MAIN_PROCESS_PID" )"
+      nsenter -at $UNSHARE_PID -- mkdir /tmp/.X11-unix/
+      nsenter -at $UNSHARE_PID -- socat unix-listen:/tmp/.X11-unix/X0,fork "tcp6-connect:[$HOST_IP6%$NET_NAME]:6000" & SOCAT_PID1="$(pgrep -P "$!" )"
+      nsenter -at $UNSHARE_PID -- chown "$USER:" -R /tmp/.X11-unix/
+      wait $MAIN_PROCESS_PID
+      kill $SOCAT_PID1
+    }
+    net_fun_daemon
+    #net_fun_daemon & NET_FUN_DAEMON_PID=$!
+  fi
 
-  tear_down
-  echo_if_not_quiet "Everything went fine. Bye!"
-  exit $UNSHARE_EXIT
+  wait $MAIN_PROCESS_PID
 }
 
 main "$@"
