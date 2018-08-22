@@ -380,6 +380,7 @@ UNSHARE_COMMANDS
     unshare_net_hook "$UNSHARE" "${UNSHARE_OPTIONS[@]}" "$BASH" "/proc/self/fd/3" < /proc/self/fd/6
     UNSHARE_EXIT=$?
     kill $MAIN_PROCESS_EXIT_HELPER_PID
+    sleep 2
     tear_down
     echo_if_not_quiet "Everything went fine. Bye!"
     exit $UNSHARE_EXIT
@@ -391,12 +392,16 @@ UNSHARE_COMMANDS
       HOST_IP6="$( ip -6 addr show $NET_NAME |grep -oE "inet6 [0-9a-f:]+"| cut -d' ' -f2- )"
       echo "HOST_IP6=$HOST_IP6"
       UNSHARE_PID="$(pgrep -P "$MAIN_PROCESS_PID" )"
-      socat tcp6-listen:6000,so-bindtodevice=$NET_NAME,reuseaddr,fork unix-connect:/tmp/.X11-unix/X0 & SOCAT_PID1=$!
+      socat tcp6-listen:100,so-bindtodevice=$NET_NAME,reuseaddr,fork unix-connect:/tmp/.X11-unix/X0 & SOCAT_PID11=$!
+      #socat tcp6-listen:101,so-bindtodevice=$NET_NAME,reuseaddr,fork unix-connect:/tmp/.X11-unix/1018 & SOCAT_PID21=$!
       nsenter -at $UNSHARE_PID -- mkdir /tmp/.X11-unix/
-      nsenter -at $UNSHARE_PID -- socat unix-listen:/tmp/.X11-unix/X0,fork "tcp6-connect:[$HOST_IP6%$NET_NAME]:6000" & SOCAT_PID2="$( sleep 1; pgrep -P "$!" )"
+      #nsenter -at $UNSHARE_PID -- mkdir /tmp/.ICE-unix/
+      nsenter -at $UNSHARE_PID -- socat unix-listen:/tmp/.X11-unix/X0,fork "tcp6-connect:[$HOST_IP6%$NET_NAME]:100" & SOCAT_PID12="$( sleep 1; pgrep -P "$!" )"
+      #nsenter -at $UNSHARE_PID -- socat unix-listen:/tmp/.ICE-unix/1018,fork "tcp6-connect:[$HOST_IP6%$NET_NAME]:101" & SOCAT_PID22="$( sleep 1; pgrep -P "$!" )"
       nsenter -at $UNSHARE_PID -- chown "$USER:" -R /tmp/.X11-unix/
+      #nsenter -at $UNSHARE_PID -- chown "$USER:" -R /tmp/.ICE-unix/
       wait $MAIN_PROCESS_EXIT_HELPER_PID
-      kill $SOCAT_PID1 $SOCAT_PID2
+      kill $SOCAT_PID11 $SOCAT_PID12 #$SOCAT_PID21 $SOCAT_PID22
     }
     net_fun_daemon
     #net_fun_daemon & NET_FUN_DAEMON_PID=$!
