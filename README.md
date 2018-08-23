@@ -3,7 +3,7 @@ Experiments with unshare
 (currently only one)
 
 ## per-app-crypted-home.bash
-This script uses an encrypted container used as home directory for the application given as argument. It unshares mountpoint, network, IPC and UTS namespaces. The script is designed as proof of concept application sandboxing wrapper. Shadowing of original home directory is intentional. To use dm-crypt and configure NAT the script needs sudo to get root access. To use X it preserves environment variables while switching between your user and root. To run X applications you need to pass "--skip-network" and "--skip-uts" or "--xhost-add-localuser" and "--nat". If you pass "--skip-network" than "--tcpdump" and "--nat" won't work.
+This script uses an encrypted container as home directory for the application given as argument. It unshares mountpoint, network, IPC and UTS namespaces. The script is designed as proof of concept application sandboxing wrapper. Shadowing of original home directory is intentional. To use dm-crypt and configure NAT the script needs sudo to get root access. To use X it preserves environment variables while switching between your user and root. To run X applications you need to pass "--skip-network" and "--skip-uts" or "--xhost-add-localuser" and "--nat". If you pass "--skip-network" than "--tcpdump" and "--nat" won't work.
 
 Warning: Option "--nat" will enable IP forwarding on your default network interface and WILL NOT remove thoses changes on tear down. Option "--xhost-add-localuser" will add an exception to your X access control list and also WILL NOT remove changes on quit.
 
