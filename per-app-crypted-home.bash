@@ -19,6 +19,8 @@ GREP="$( which grep )"
 HEAD="$( which head )"
 ID="$( which id )"
 IP="$( which ip )"
+IPTABLES="$( which iptables )"
+IP6TABLES="$( which ip6tables )"
 MKFS="$( which mkfs )"
 MOUNT="$( which mount )"
 NSENTER="$( which nsenter )"
@@ -63,6 +65,10 @@ VETH_LUCKYNR=$(( ( RANDOM % 128 )  + 32 ))
 VETH_HOST_IP4="192.168.$VETH_LUCKYNR.1"
 VETH_VM_IP4="192.168.$VETH_LUCKYNR.2"
 VETH_SUBNET4="24"
+VETH_HOST_IP6="fd63:e832:5133:6194::1"
+VETH_VM_IP6="fd63:e832:5133:6194::2"
+VETH_VM_NET6="fd63:e832:5133:6194::/64"
+VETH_SUBNET6="64"
 TCPDUMP_LOGGING=
 
 print_usage() {
@@ -406,25 +412,29 @@ UNSHARE_COMMANDS
 
   if [ "$SKIP_NETWORK" != "true" ]; then
     timeout 10s "$BASH" -c "while ! '$IP' -6 addr show '$NET_NAME' |'$GREP' -q 'UP,LOWER_UP' 2>/dev/null; do sleep 1; done"
-    VETH_HOST_IP6="$( "$IP" -6 addr show "$NET_NAME" |"$GREP" -oE "inet6 [0-9a-f:]+"| "$CUT" -d' ' -f2- )"
+    #VETH_HOST_IP6="$( "$IP" -6 addr show "$NET_NAME" |"$GREP" -oE "inet6 [0-9a-f:]+"| "$CUT" -d' ' -f2- )"
     #echo "VETH_HOST_IP6=$VETH_HOST_IP6"
     UNSHARE_PID="$(pgrep -P "$MAIN_PROCESS_PID" )"
-    "$NSENTER" -at $UNSHARE_PID -- "$IP" address add "$VETH_VM_IP4/$VETH_SUBNET4" dev "$NET_NAME"
     "$IP" address add "$VETH_HOST_IP4/$VETH_SUBNET4" dev "$NET_NAME"
+    "$NSENTER" -at $UNSHARE_PID -- "$IP" address add "$VETH_VM_IP4/$VETH_SUBNET4" dev "$NET_NAME"
+    "$IP" -6 address add "$VETH_HOST_IP6/$VETH_SUBNET6" dev "$NET_NAME"
+    "$NSENTER" -at $UNSHARE_PID -- "$IP" -6 address add "$VETH_VM_IP6/$VETH_SUBNET6" dev "$NET_NAME"
     if [ "$DO_NAT" = "true" ]; then
       # container ip masquerading
       echo 1 > "/proc/sys/net/ipv4/conf/$NET_NAME/forwarding"
-      echo 1 > "/proc/sys/net/ipv6/conf/$NET_NAME/forwarding"
+      #echo 1 > "/proc/sys/net/ipv6/conf/$NET_NAME/forwarding"
       "$NSENTER" -at $UNSHARE_PID -- "$IP" route add default via "$VETH_HOST_IP4" dev "$NET_NAME"
       "$NSENTER" -at $UNSHARE_PID -- "$IP" route add default via "$VETH_HOST_IP6" dev "$NET_NAME"
       # host ip masquerading
       HOST_DEFAULT_ROUTE_INTERFACE="$( "$IP" route show default |"$GREP" -o " dev [^ ]*"|"$CUT" -d' ' -f3- )"
       for INTERFACE in $HOST_DEFAULT_ROUTE_INTERFACE; do
         echo 1 > "/proc/sys/net/ipv4/conf/$INTERFACE/forwarding"
-        iptables -t nat -C POSTROUTING -o $INTERFACE -j MASQUERADE 2>/dev/null || \
-        iptables -t nat -A POSTROUTING -o $INTERFACE -j MASQUERADE
-        ip6tables -t nat -C POSTROUTING -o $INTERFACE -s fe80::/96 -j MASQUERADE 2>/dev/null || \
-        ip6tables -t nat -A POSTROUTING -o $INTERFACE -s fe80::/96 -j MASQUERADE
+        #echo 1 > "/proc/sys/net/ipv6/conf/$INTERFACE/forwarding"
+        "$IPTABLES" -t nat -C POSTROUTING -o $INTERFACE -j MASQUERADE 2>/dev/null || \
+        "$IPTABLES" -t nat -A POSTROUTING -o $INTERFACE -j MASQUERADE
+        ## TODO FIXME tear down remove:
+        #"$IP6TABLES" -t nat -C POSTROUTING -o $INTERFACE -s "$VETH_VM_NET6" -j MASQUERADE 2>/dev/null || \
+        #"$IP6TABLES" -t nat -A POSTROUTING -o $INTERFACE -s "$VETH_VM_NET6" -j MASQUERADE
 	# handle only first interface
 	break
       done
