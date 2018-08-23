@@ -15,6 +15,7 @@ FILE="$( which file )"
 FSCK="$( which fsck )"
 GETOPT="$( which getopt )"
 GREP="$( which grep )"
+HEAD="$( which head )"
 ID="$( which id )"
 IP="$( which ip )"
 MKFS="$( which mkfs )"
@@ -407,23 +408,26 @@ UNSHARE_COMMANDS
 
   if [ "$SKIP_NETWORK" != "true" ]; then
     timeout 10s "$BASH" -c "while ! '$IP' -6 addr show '$NET_NAME' |'$GREP' -q 'UP,LOWER_UP' 2>/dev/null; do sleep 1; done"
-    HOST_IP6="$( "$IP" -6 addr show "$NET_NAME" |"$GREP" -oE "inet6 [0-9a-f:]+"| "$CUT" -d' ' -f2- )"
-    #echo "HOST_IP6=$HOST_IP6"
+    VETH_HOST_IP6="$( "$IP" -6 addr show "$NET_NAME" |"$GREP" -oE "inet6 [0-9a-f:]+"| "$CUT" -d' ' -f2- )"
+    #echo "VETH_HOST_IP6=$VETH_HOST_IP6"
     UNSHARE_PID="$(pgrep -P "$MAIN_PROCESS_PID" )"
-    # ip6
-    "$NSENTER" -at $UNSHARE_PID -- "$IP" route add default via "$HOST_IP6" dev "$NET_NAME"
-    # ip4
-    "$IP" address add "$VETH_HOST_IP4/$VETH_SUBNET4" dev "$NET_NAME"
     "$NSENTER" -at $UNSHARE_PID -- "$IP" address add "$VETH_VM_IP4/$VETH_SUBNET4" dev "$NET_NAME"
-    # container ip masquerading
-    echo 1 > "/proc/sys/net/ipv4/conf/$NET_NAME/forwarding"
-    "$NSENTER" -at $UNSHARE_PID -- "$IP" route add default via "$VETH_HOST_IP4" dev "$NET_NAME"
+    "$IP" address add "$VETH_HOST_IP4/$VETH_SUBNET4" dev "$NET_NAME"
     if [ "$DO_NAT" = "true" ]; then
+      # container ip masquerading
+      echo 1 > "/proc/sys/net/ipv4/conf/$NET_NAME/forwarding"
+      echo 1 > "/proc/sys/net/ipv6/conf/$NET_NAME/forwarding"
+      "$NSENTER" -at $UNSHARE_PID -- "$IP" route add default via "$VETH_HOST_IP4" dev "$NET_NAME"
+      "$NSENTER" -at $UNSHARE_PID -- "$IP" route add default via "$VETH_HOST_IP6" dev "$NET_NAME"
       # host ip masquerading
       HOST_DEFAULT_ROUTE_INTERFACE="$( "$IP" route show default |"$GREP" -o " dev [^ ]*"|"$CUT" -d' ' -f3- )"
-      echo 1 > "/proc/sys/net/ipv4/conf/$HOST_DEFAULT_ROUTE_INTERFACE/forwarding"
-      iptables -t nat -C POSTROUTING -o $HOST_DEFAULT_ROUTE_INTERFACE -j MASQUERADE 2>/dev/null || \
-      iptables -t nat -A POSTROUTING -o $HOST_DEFAULT_ROUTE_INTERFACE -j MASQUERADE
+      for INTERFACE in "$HOST_DEFAULT_ROUTE_INTERFACE"; do
+        echo 1 > "/proc/sys/net/ipv4/conf/$INTERFACE/forwarding"
+        iptables -t nat -C POSTROUTING -o $INTERFACE -j MASQUERADE 2>/dev/null || \
+        iptables -t nat -A POSTROUTING -o $INTERFACE -j MASQUERADE
+        ip6tables -t nat -C POSTROUTING -o $INTERFACE -s fe80::/96 -j MASQUERADE 2>/dev/null || \
+        ip6tables -t nat -A POSTROUTING -o $INTERFACE -s fe80::/96 -j MASQUERADE
+      done
     fi
     # capture tcp syn&fin, all udp and all icmp
     if [ "$TCPDUMP_LOGGING" = "true" ]; then
