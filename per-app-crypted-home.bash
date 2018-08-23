@@ -4,6 +4,7 @@
 
 # some stupid stuff
 BASH="$( which bash )"
+BASENAME="$( which basename )"
 BLOCKDEV="$( which blockdev )"
 CAT="$( which cat )"
 CRYPTSETUP="$( which cryptsetup )"
@@ -21,6 +22,7 @@ IP="$( which ip )"
 MKFS="$( which mkfs )"
 MOUNT="$( which mount )"
 NSENTER="$( which nsenter )"
+REPLACE="$( which replace )"
 RESIZE2FS="$( which resize2fs )"
 RM="$( which rm )"
 SED="$( which sed )"
@@ -30,19 +32,19 @@ STAT="$( which stat )"
 SU="$( which su )"
 SUDO="$( which sudo )"
 TAIL="$( which tail )"
+TCPDUMP="$( which tcpdump )"
 TIMEOUT="$( which timeout )"
 TRUNCATE="$( which truncate )"
 UNSHARE="$( which unshare )"
 XARGS="$( which xargs )"
+XHOST="$( which xhost )"
 
 # some interesting stuff
 APPLICATION=
 APPLICATION_ARGS=
 HASHCMD="$( which sha256sum )"
-HOMECONTAINER=
-USER_HOMECONTAINER=
-APPLICATION_ID=
-USER_APPLICATION_ID=
+HOMECONTAINER="\$HOME/crypted-home-for-\$APPLICATION_ID"
+APPLICATION_ID="\$BASENAME-\$PATHHASH"
 KEY_FILE=
 DMCRYPTED_HOMECONTAINER=
 CONTAINER_SIZE="1024M"
@@ -53,6 +55,7 @@ LOG_PREFIX="[$0]"
 UNSHARE_OPTIONS=( --kill-child --fork --pid --mount-proc --mount ) # --net --ipc
 DO_NAT=
 DO_RESIZE=
+DO_XHOST_ADD_LOCALUSER=
 SKIP_IPC=
 SKIP_NETWORK=
 SKIP_UTS=
@@ -70,10 +73,10 @@ Usage:
 Runs application within an encrypted sandboxed filesystem used as home shadowing users original home directory.
 
 Options:
-  -c, --container=FILE            File used as container for encrypted home ( default: "~/crypted-home-for-IDENTIFIER" )
+  -c, --container=FILE            File used as container for encrypted home ( default: "$HOMECONTAINER" )
   -f, --fs-type=TYPE              Filesystem type inside container ( default: $FS_TYPE )
   -H, --hash=COMMAND              Hash executable used to build application identifier ( default: $HASHCMD )
-  -i, --id=IDENTIFIER             Used to seperate containers for different applications with same basename ( default: "APP:BASENAME_APP:PATH:HASH" )
+  -i, --id=APPLICATION_ID         Application identifier ( default: "$APPLICATION_ID" )
   -k, --key-file=FILE             Use key from FILE instead of passphrase for dm-crypt
   -n, --nat                       Setup NAT for internet access
   -r, --resize=SIZE               Resize an existing container
@@ -81,6 +84,7 @@ Options:
   --skip-ipc                      Skip IPC virtualisation
   --skip-network                  Skip network virtualisation
   --skip-uts                      Skip UTS (hostname) virtualisation
+  -x, --xhost-add-localuser       Add current user via xhost to X access control list
   -t, --tcpdump                   Dump reduced version of network traffic with tcpdump
   --teardown-timeout=SECONDS      Timeout for closing the container ( default: $TEAR_DOWN_TIMEOUT seconds )
   -q, --quiet                     Suppress extra output
@@ -97,7 +101,7 @@ parse_options() {
     print_usage
     exit 1
   fi
-  OPTS=$( POSIXLY_CORRECT=1 "$GETOPT" --options 'c:f:H:i:k:nr:s:tqxh' --longoptions 'container:,fs-type:,hash:,id:,key-file:,nat,resize:,size:,skip-ipc,skip-network,skip-uts,tcpdump,teardown-timeout:,quiet,extra-sandboxing,help' --name "$0" -- "$@" )
+  OPTS=$( POSIXLY_CORRECT=1 "$GETOPT" --options 'c:f:H:i:k:nr:s:tqxh' --longoptions 'container:,fs-type:,hash:,id:,key-file:,nat,resize:,size:,skip-ipc,skip-network,skip-uts,tcpdump,teardown-timeout:,quiet,xhost-add-localuser,help' --name "$0" -- "$@" )
   GETOPT_RETURN_CODE=$?
   if [ "$GETOPT_RETURN_CODE" != "0" ]; then
     print_usage
@@ -106,10 +110,10 @@ parse_options() {
   eval set -- "$OPTS"
   while (( $# > 0 )); do
     case "$1" in
-      -c|--container) shift; USER_HOMECONTAINER="$1";;
+      -c|--container) shift; HOMECONTAINER="$1";;
       -f|--fs-type) shift; FS_TYPE="$1"; { which "$MKFS.$FS_TYPE" && which "$FSCK.$FS_TYPE"; } >/dev/null 2>&1 || die "Mkfs \"$MKFS.$FS_TYPE\" or fsck \"$FSCK.$FS_TYPE\" missing for filesystem type \"$1\"";;
       -H|--hash) shift; HASHCMD="$( which "$1" 2>/dev/null )" || die "Hash executable \"$1\" not found or not executable";;
-      -i|--id) shift; USER_APPLICATION_ID="$1";;
+      -i|--id) shift; APPLICATION_ID="$1";;
       -k|--key-file) shift; KEY_FILE="$1";;
       -n|--nat) DO_NAT=true;;
       -r|--resize) shift; [ "$( toBytes "$1")" -gt 0 ] 2>/dev/null && DO_RESIZE="$1" || die "Resize size \"$1\" seems to be invalid";;
@@ -119,6 +123,7 @@ parse_options() {
       --skip-uts) SKIP_UTS=true;;
       -t|--tcpdump) TCPDUMP_LOGGING=true;;
       --teardown-timeout) shift; [ "$1" -gt 0 ] 2>/dev/null && TEAR_DOWN_TIMEOUT="$1" || die "Timeout \"$1\" seems to be invalid";;
+      -x|--xhost-add-localuser) DO_XHOST_ADD_LOCALUSER=true;;
       -q|--quiet) QUIET=true;;
       --) shift; APPLICATION="$( which "$1" 2>/dev/null )" || die "Application executable \"$1\" not found or not executable"; shift; APPLICATION_ARGS=( "$@" ); break;;
       -h|--help) print_usage; exit 0;;
@@ -126,16 +131,8 @@ parse_options() {
     esac
     shift;
   done
-  if [ -n "$USER_APPLICATION_ID" ]; then
-    APPLICATION_ID="$USER_APPLICATION_ID"
-  else
-    APPLICATION_ID="$( basename "$APPLICATION" )-$( echo "$APPLICATION" | "$HASHCMD" |"$CUT" -f1 -d' ' )"
-  fi
-  if [ -n "$USER_HOMECONTAINER" ]; then
-    HOMECONTAINER="$USER_HOMECONTAINER"
-  else
-    HOMECONTAINER="$HOME/crypted-home-for-$APPLICATION_ID"
-  fi
+  APPLICATION_ID="$( echo "$APPLICATION_ID" | "$REPLACE" "\$BASENAME" "$( "$BASENAME" "$APPLICATION" )" | "$REPLACE" "\$PATHHASH" "$( echo "$APPLICATION" | "$HASHCMD" |"$CUT" -f1 -d' ' )" )"
+  HOMECONTAINER="$( echo "$HOMECONTAINER" | "$REPLACE" "\$APPLICATION_ID" "$APPLICATION_ID" | "$REPLACE" "\$HOME" "$HOME" )"
   DMCRYPTED_HOMECONTAINER="/dev/mapper/$APPLICATION_ID"
 }
 
@@ -355,8 +352,9 @@ main() {
     UNSHARE_OPTIONS+=("--ipc")
   fi
 
-  # FIXME really not sure how to handle that problem
-  xhost si:localuser:$USER # not to forget to punch holes in our sandbox
+  if [ "$DO_XHOST_ADD_LOCALUSER" ]; then
+    "$XHOST" si:localuser:$USER # not to forget to punch holes in our sandbox
+  fi
 
   UTS_CMDS=
   if [ "$SKIP_UTS" != "true" ]; then
@@ -421,17 +419,19 @@ UNSHARE_COMMANDS
       "$NSENTER" -at $UNSHARE_PID -- "$IP" route add default via "$VETH_HOST_IP6" dev "$NET_NAME"
       # host ip masquerading
       HOST_DEFAULT_ROUTE_INTERFACE="$( "$IP" route show default |"$GREP" -o " dev [^ ]*"|"$CUT" -d' ' -f3- )"
-      for INTERFACE in "$HOST_DEFAULT_ROUTE_INTERFACE"; do
+      for INTERFACE in $HOST_DEFAULT_ROUTE_INTERFACE; do
         echo 1 > "/proc/sys/net/ipv4/conf/$INTERFACE/forwarding"
         iptables -t nat -C POSTROUTING -o $INTERFACE -j MASQUERADE 2>/dev/null || \
         iptables -t nat -A POSTROUTING -o $INTERFACE -j MASQUERADE
         ip6tables -t nat -C POSTROUTING -o $INTERFACE -s fe80::/96 -j MASQUERADE 2>/dev/null || \
         ip6tables -t nat -A POSTROUTING -o $INTERFACE -s fe80::/96 -j MASQUERADE
+	# handle only first interface
+	break
       done
     fi
     # capture tcp syn&fin, all udp and all icmp
     if [ "$TCPDUMP_LOGGING" = "true" ]; then
-      tcpdump -ni "$NET_NAME" -w "$NET_NAME.$(date +"%Y%m%d%H%M").pcap" "tcp[tcpflags] & (tcp-syn|tcp-fin) != 0 or udp or icmp" & DAEMON_PIDS="$DAEMON_PIDS $!"
+      "$TCPDUMP" -ni "$NET_NAME" -w "$NET_NAME.$(date +"%Y%m%d%H%M").pcap" "tcp[tcpflags] & (tcp-syn|tcp-fin) != 0 or udp or icmp" & DAEMON_PIDS="$DAEMON_PIDS $!"
     fi
   fi
 
