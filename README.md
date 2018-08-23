@@ -7,6 +7,7 @@ This script creates an encrypted container used as home directory for the applic
 
 Warning: Option "--nat" will enable IP forwarding on your default network interface and WILL NOT remove thoses changes on tear down. Option "--xhost-add-localuser" will add an exception to your X access control list and also WILL NOT remove changes on quit.
 
+ProTip: Use "--key-file=/dev/null" for throwaway containers.
 
 ### Usage
 ```
