@@ -58,9 +58,11 @@ UNSHARE_OPTIONS=( --kill-child --fork --pid --mount-proc --mount ) # --net --ipc
 DO_NAT=
 DO_RESIZE=
 DO_XHOST_ADD_LOCALUSER=
+SKIP_DBUS_LAUNCH=
 SKIP_IPC=
 SKIP_NETWORK=
 SKIP_UTS=
+SKIP_XDG_RUNTIME_DIR=
 VETH_LUCKYNR=$(( ( RANDOM % 128 )  + 32 ))
 VETH_HOST_IP4="192.168.$VETH_LUCKYNR.1"
 VETH_VM_IP4="192.168.$VETH_LUCKYNR.2"
@@ -87,9 +89,11 @@ Options:
   -n, --nat                       Setup NAT for internet access
   -r, --resize=SIZE               Resize an existing container
   -s, --size=SIZE                 Maximum size of container ( default: $CONTAINER_SIZE )
+  --skip-dbus-launch              Skip DBUS launch inside container
   --skip-ipc                      Skip IPC virtualisation
   --skip-network                  Skip network virtualisation
   --skip-uts                      Skip UTS (hostname) virtualisation
+  --skip-xdg-runtime-dir          Skip shadowing of XDG_RUNTIME_DIR
   -x, --xhost-add-localuser       Add current user via xhost to X access control list
   -t, --tcpdump                   Dump reduced version of network traffic with tcpdump
   --teardown-timeout=SECONDS      Timeout for closing the container ( default: $TEAR_DOWN_TIMEOUT seconds )
@@ -107,7 +111,7 @@ parse_options() {
     print_usage
     exit 1
   fi
-  OPTS=$( POSIXLY_CORRECT=1 "$GETOPT" --options 'c:f:H:i:k:nr:s:tqxh' --longoptions 'container:,fs-type:,hash:,id:,key-file:,nat,resize:,size:,skip-ipc,skip-network,skip-uts,tcpdump,teardown-timeout:,quiet,xhost-add-localuser,help' --name "$0" -- "$@" )
+  OPTS=$( POSIXLY_CORRECT=1 "$GETOPT" --options 'c:f:H:i:k:nr:s:tqxh' --longoptions 'container:,fs-type:,hash:,id:,key-file:,nat,resize:,size:,skip-ipc,skip-dbus-launch,skip-network,skip-uts,skip-xdg-runtime-dir,tcpdump,teardown-timeout:,quiet,xhost-add-localuser,help' --name "$0" -- "$@" )
   GETOPT_RETURN_CODE=$?
   if [ "$GETOPT_RETURN_CODE" != "0" ]; then
     print_usage
@@ -124,9 +128,11 @@ parse_options() {
       -n|--nat) DO_NAT=true;;
       -r|--resize) shift; [ "$( toBytes "$1")" -gt 0 ] 2>/dev/null && DO_RESIZE="$1" || die "Resize size \"$1\" seems to be invalid";;
       -s|--size) shift; [ "$( toBytes "$1")" -gt 0 ] 2>/dev/null && CONTAINER_SIZE="$1" || die "Container size \"$1\" seems to be invalid";;
+      --skip-dbus-launch) SKIP_DBUS_LAUNCH=true;;
       --skip-ipc) SKIP_IPC=true;;
       --skip-network) SKIP_NETWORK=true;;
       --skip-uts) SKIP_UTS=true;;
+      --skip-xdg-runtime-dir) SKIP_XDG_RUNTIME_DIR=true;;
       -t|--tcpdump) TCPDUMP_LOGGING=true;;
       --teardown-timeout) shift; [ "$1" -gt 0 ] 2>/dev/null && TEAR_DOWN_TIMEOUT="$1" || die "Timeout \"$1\" seems to be invalid";;
       -x|--xhost-add-localuser) DO_XHOST_ADD_LOCALUSER=true;;
@@ -349,6 +355,9 @@ main() {
   # TODO overwrite by cmdline option
   NET_NAME="${APPLICATION_ID:0:8}${APPLICATION_ID:(-7)}"
 
+
+  USER_EXTRA_CMDS=
+
   CHOWN_CMD=
   if [ "$NEED_FORMAT" = "true" ]; then
     CHOWN_CMD="'$CHOWN' '$USER:' '-R' '$HOME'"
@@ -360,6 +369,20 @@ main() {
 
   if [ "$DO_XHOST_ADD_LOCALUSER" ]; then
     "$XHOST" si:localuser:$USER # not to forget to punch holes in our sandbox
+  fi
+
+  HIDE_XGD_RUNTIME_DIR_CMDS=
+  if [ "$SKIP_XDG_RUNTIME_DIR" != "true" ] && [ -d "$XDG_RUNTIME_DIR" ]; then
+    HIDE_XGD_RUNTIME_DIR_CMDS="mount -t tmpfs tmpfs '$XDG_RUNTIME_DIR' && \
+                   chown '$USER:' '$XDG_RUNTIME_DIR' && \
+                   chmod go-rwx '$XDG_RUNTIME_DIR'"
+  fi
+
+  DBUS_LAUNCH_CMDS=
+  if [ "$SKIP_DBUS_LAUNCH" != "true" ]; then
+    #DBUS_LAUNCH_CMDS="export \"DBUS_SESSION_BUS_ADDRESS=\$( su \"$USER\" -c \"dbus-daemon --session --fork --address=unix:path=$XDG_RUNTIME_DIR/bus --nosyslog --print-pid --print-address\" )\""
+    DBUS_LAUNCH_CMDS="unset DBUS_SESSION_BUS_ADDRESS"
+    USER_EXTRA_CMDS="export DBUS_SESSION_BUS_ADDRESS=\\\$( dbus-daemon --session --fork --address=unix:path=$XDG_RUNTIME_DIR/bus --nosyslog --print-address ); "
   fi
 
   UTS_CMDS=
@@ -386,12 +409,14 @@ main() {
 exec 3<&-
 set -e
 [ -z "$QUIET" ] && set -x
+$HIDE_XGD_RUNTIME_DIR_CMDS
+$DBUS_LAUNCH_CMDS
 $NETWORK_SETUP_CMDS
 $UTS_CMDS
 "$MOUNT" "$DMCRYPTED_HOMECONTAINER" "$HOME"
 $CHOWN_CMD
 cd "$HOME"
-exec su "$USER" --preserve-environment -s "$BASH" -c "$APPLICATION_CMD_SERIALIZED_L3"
+exec su "$USER" --preserve-environment -s "$BASH" -c "$USER_EXTRA_CMDS$APPLICATION_CMD_SERIALIZED_L3"
 UNSHARE_COMMANDS
 )
   exec 6<&0

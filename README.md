@@ -24,15 +24,16 @@ Options:
   -n, --nat                       Setup NAT for internet access
   -r, --resize=SIZE               Resize an existing container
   -s, --size=SIZE                 Maximum size of container ( default: 1024M )
+  --skip-dbus-launch              Skip DBUS launch inside container
   --skip-ipc                      Skip IPC virtualisation
   --skip-network                  Skip network virtualisation
   --skip-uts                      Skip UTS (hostname) virtualisation
+  --skip-xdg-runtime-dir          Skip shadowing of XDG_RUNTIME_DIR
   -x, --xhost-add-localuser       Add current user via xhost to X access control list
   -t, --tcpdump                   Dump reduced version of network traffic with tcpdump
   --teardown-timeout=SECONDS      Timeout for closing the container ( default: 10 seconds )
   -q, --quiet                     Suppress extra output
   -h, --help                      Display this help and exits
-
 ```
 ### Simple example
 ```sh
