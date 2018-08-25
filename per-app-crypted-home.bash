@@ -382,7 +382,7 @@ main() {
   if [ "$SKIP_DBUS_LAUNCH" != "true" ]; then
     #DBUS_LAUNCH_CMDS="export \"DBUS_SESSION_BUS_ADDRESS=\$( su \"$USER\" -c \"dbus-daemon --session --fork --address=unix:path=$XDG_RUNTIME_DIR/bus --nosyslog --print-pid --print-address\" )\""
     DBUS_LAUNCH_CMDS="unset DBUS_SESSION_BUS_ADDRESS"
-    USER_EXTRA_CMDS="export DBUS_SESSION_BUS_ADDRESS=\\\$( dbus-daemon --session --fork --address=unix:path=$XDG_RUNTIME_DIR/bus --nosyslog --print-address ); "
+    USER_EXTRA_CMDS="export DBUS_SESSION_BUS_ADDRESS=\\\$( dbus-daemon --session --fork --address=unix:path=$XDG_RUNTIME_DIR/bus-$NET_NAME --nosyslog --print-address ); "
   fi
 
   UTS_CMDS=
