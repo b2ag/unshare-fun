@@ -421,13 +421,13 @@ UNSHARE_COMMANDS
 )
   exec 6<&0
   exec < /dev/null
-  { sleep infinity; } & MAIN_PROCESS_EXIT_HELPER_PID=$!
+  "$SLEEP" infinity & MAIN_PROCESS_EXIT_HELPER_PID=$!
 
   {
     unshare_net_hook "$UNSHARE" "${UNSHARE_OPTIONS[@]}" "$BASH" "/proc/self/fd/3" < /proc/self/fd/6
     UNSHARE_EXIT=$?
     kill $MAIN_PROCESS_EXIT_HELPER_PID
-    sleep 2
+    "$SLEEP" 2
     tear_down
     echo_if_not_quiet "Everything went fine. Bye!"
     exit $UNSHARE_EXIT
