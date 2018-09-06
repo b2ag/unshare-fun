@@ -38,6 +38,8 @@ from docopt import docopt
 import logging
 import math
 import os
+import pwd
+import random
 import re
 import subprocess
 import signal
@@ -99,24 +101,28 @@ def parse_arguments():
   config['app_path'] = distutils.spawn.find_executable(arguments['<application>'])
   if not config['app_path']:
     die("Couldn't find application executable for \"{}\"".format(arguments['<application>']))
+  config['uid'] = os.getuid() if os.getuid() is not 0 else int(os.getenv('uid'))
+  config['gid'] = pwd.getpwuid(config['uid']).pw_gid
+  config['user'] = pwd.getpwuid(config['uid']).pw_name
+  config['home'] = pwd.getpwuid(config['uid']).pw_dir
   config['app_arguments'] = arguments['<arguments>']
   config['app_basename'] = os.path.basename(arguments['<application>'])
-  config['unshare_flags'] = [ 'CLONE_NEWNS', 'CLONE_NEWPID', 'CLONE_NEWIPC', 'CLONE_NEWNET' ]
+  config['unshare_flags'] = [ 'CLONE_NEWNS', 'CLONE_NEWPID', 'CLONE_NEWUTS', 'CLONE_NEWIPC', 'CLONE_NEWNET' ]
   config['hashtool'] = arguments['--hash']
   config['teardown_timeout'] = int(arguments['--teardown-timeout'])
   config['app_path_hash'] = subprocess.Popen([config['hashtool']],stdout=subprocess.PIPE,stdin=subprocess.PIPE,stderr=subprocess.DEVNULL).communicate(config['app_path'].encode()+b'\n')[0].decode().split(' ')[0] # extra newline for compability with bash script version
   config['app_id'] = arguments['--id'].replace('$BASENAME',config['app_basename']).replace('$PATHHASH',config['app_path_hash'])
-  config['container'] = arguments['--container'].replace('$HOME',os.getenv("HOME")).replace('$APPLICATION_ID', config['app_id'])
+  config['container'] = arguments['--container'].replace('$HOME',config['home']).replace('$APPLICATION_ID', config['app_id'])
   config['fs_type'] = arguments['--fs-type'].lower()
   config['fsck'] = distutils.spawn.find_executable('fsck.{}'.format(config['fs_type']))
   config['mkfs'] = distutils.spawn.find_executable('mkfs.{}'.format(config['fs_type']))
   config['key_file'] = arguments['--key-file']
   config['open_container'] = '/dev/mapper/{}'.format(config['app_id'])
-  config['do_mkfs'] = os.getuid() is 0 and os.getenv('DO_MKFS') is '1'
-  config['USER'] = os.getenv('USER')
-  config['HOME'] = os.getenv('HOME')
+  config['do_mkfs'] = os.getuid() is 0 and os.getenv('do_mkfs') is '1'
   config['net_name'] = config['app_id'][:8] + config['app_id'][-7:]
   config['parent'] = True
+  config['parent_pid'] = os.getpid()
+  config['do_nat'] = arguments['--nat']
   if arguments['--resize']:
     config['resize'] = arguments['--resize'].upper()
     if not human2bytes(config['resize']):
@@ -136,9 +142,8 @@ def escalate_priviledges( config ):
             [
                 'sudo',
                 '-E',
-                'USER={USER}'.format(**config),
-                'HOME={HOME}'.format(**config),
-                'DO_MKFS={do_mkfs:d}'.format(**config),
+                'uid={uid}'.format(**config),
+                'do_mkfs={do_mkfs:d}'.format(**config),
             ]+sys.argv)
   else:
     die('Should not get here')
@@ -322,23 +327,76 @@ def main():
         if datetime.datetime.utcnow() > deadline:
           logging.info("Timed out. Sending SIGKILL")
           application.send_signal( signal.SIGKILL )
+          sys.exit(1)
           break
         time.sleep(2)
         if not application.returncode:
           logging.info("Retrying")
-      initproc.send_signal( signal.SIGKILL )
+      sys.exit(application.returncode)
+
+    # call unshare function
     if libc.unshare( config['unshare_flags'] ) is not 0:
       die("Unshare failed")
+
+    # keep links to parent namespaces
+    parent_mnt_ns = open('/proc/{}/ns/mnt'.format(config['parent_pid']),'rb')
+    parent_pid_ns = open('/proc/{}/ns/pid'.format(config['parent_pid']),'rb')
+    parent_net_ns = open('/proc/{}/ns/net'.format(config['parent_pid']),'rb')
+    def set_parent_ns():
+      libc.setns( parent_mnt_ns.fileno(), UNSHARE_FLAGS.flags['CLONE_NEWNS'] )
+      libc.setns( parent_pid_ns.fileno(), UNSHARE_FLAGS.flags['CLONE_NEWPID'] )
+      libc.setns( parent_net_ns.fileno(), UNSHARE_FLAGS.flags['CLONE_NEWNET'] )
 
     if 'CLONE_NEWPID' in config['unshare_flags']:
       if libc.mount( b'none', b'/', ctypes.c_char_p(0), ['MS_REC','MS_PRIVATE'], ctypes.c_char_p(0) ) is not 0:
         die('Changing mount propagation of / to private failed')
 
-    # change to root
-    os.chdir('/')
     # start init
     initproc = subprocess.Popen(['sleep','infinity'])
+    # install signal handler
+    def child_sigterm_handler( signr, stack ):
+      application_exit_helper( application, initproc, config )
+    signal.signal( signal.SIGTERM, child_sigterm_handler )
+    atexit.register( initproc.send_signal, signal.SIGKILL )
 
+    # uts namespace
+    if 'CLONE_NEWUTS' in config['unshare_flags']:
+      subprocess.run(['hostname',config['net_name']])
+
+    # network init
+    if 'CLONE_NEWNET' in config['unshare_flags']:
+      subprocess.run([
+        'ip','link','add',config['net_name'],
+        'type','veth',
+        'peer','name',config['net_name'],
+        'netns','/proc/{}/ns/net'.format(config['parent_pid'])])
+    
+    if 'CLONE_NEWNET' in config['unshare_flags']:
+      def change_to_parent_net_namespace():
+        libc.setns( parent_net_ns.fileno(), UNSHARE_FLAGS.flags['CLONE_NEWNET'] )
+      subprocess.run(['ip','link','set','lo','up'])
+      subprocess.run(['ip','link','set',config['net_name'],'up'])
+      subprocess.run(['ip','link','set',config['net_name'],'up'],preexec_fn=change_to_parent_net_namespace)
+      random_ip_part = random.randint(0,254)
+      veth_host_ip4 = '192.168.{}.1'.format(random_ip_part)
+      veth_vm_ip4 = '192.168.{}.2'.format(random_ip_part)
+      veth_subnet4 = '24'
+      subprocess.run(['ip','address','add','{}/{}'.format(veth_vm_ip4,veth_subnet4),'dev',config['net_name']])
+      subprocess.run(['ip','address','add','{}/{}'.format(veth_host_ip4,veth_subnet4),'dev',config['net_name']],preexec_fn=change_to_parent_net_namespace)
+      if config['do_nat']:
+        #subprocess.run(['sh','-c','echo 1 > /proc/sys/net/ipv4/conf/{net_name}/forwarding'.format(**config)])
+        default_route_interfaces = subprocess.check_output(['sh','-c','ip route show default |grep -o " dev [^ ]*"|cut -d" " -f3-'],preexec_fn=set_parent_ns).split(b' ')
+        logging.debug(default_route_interfaces)
+        for default_route_interface in default_route_interfaces:
+          if not default_route_interface: continue
+          logging.warning('Configuring network interface "{}" for masquerading'.format(default_route_interface))
+          subprocess.run(['sh','-c','echo 1 > /proc/sys/net/ipv4/conf/{}/forwarding'.format(default_route_interface)],preexec_fn=set_parent_ns)
+          cmd='iptables -t nat -C POSTROUTING -o {} -j MASQUERADE'.format(default_route_interface)
+          subprocess.run(['sh','-c','{} || {}'.format(cmd,cmd.replace('-C','-A'))],preexec_fn=set_parent_ns)
+        subprocess.run(['ip','route','add','default','via',veth_host_ip4,'dev',config['net_name']])
+
+
+    # pid namespace and /proc
     if 'CLONE_NEWPID' in config['unshare_flags']:
       if libc.mount( b'none', b'/proc', ctypes.c_char_p(0), 
                      ['MS_REC','MS_PRIVATE'], ctypes.c_char_p(0) ) is not 0:
@@ -353,25 +411,29 @@ def main():
     # mount home
     if libc.mount( 
          config['open_container'].encode(), 
-         config['HOME'].encode(), 
+         config['home'].encode(), 
          config['fs_type'].encode(), 
          [], ctypes.c_char_p(0) ) is not 0:
-      logging.error('Mount private home failed: {}'.format(os.strerror(ctypes.get_errno())))
+      die('Mount private home failed: {}'.format(os.strerror(ctypes.get_errno())))
+    # chown fresh home
+    if config['do_mkfs']:
+      if subprocess.run([ 'chown', '{}:{}'.format(config['uid'],config['gid']) , config['home'] ]).returncode is not 0:
+        logging.error('Could not change owner of new home: {}'.format(os.strerror(ctypes.get_errno())))
+    # change directory to new home
+    os.chdir(config['home'])
 
+    # our su implementation
+    def change_user():
+      os.setgid( int(config['gid']) )
+      os.setuid( int(config['uid']) )
 
-    application = subprocess.Popen([config['app_path']]+config['app_arguments'])
-    def child_sigterm_handler( signr, stack ):
-      application_exit_helper( application, initproc, config )
-    signal.signal( signal.SIGTERM, child_sigterm_handler )
+    application = subprocess.Popen([config['app_path']]+config['app_arguments'], preexec_fn=change_user )
     try:
       sys.stdout, sys.stderr = application.communicate( sys.stdin )
     except KeyboardInterrupt:
       application.send_signal( signal.SIGINT )
 
-    logging.info("Killing init process")
-    initproc.send_signal( signal.SIGKILL )
-
-
+    sys.exit(application.returncode)
 
 if __name__ == "__main__":
   main()
