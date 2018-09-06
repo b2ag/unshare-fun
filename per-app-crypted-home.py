@@ -44,27 +44,27 @@ import signal
 import sys
 import time
 
+class FLAGS(object):
+  flags = {}
+  @classmethod
+  def from_param( self, data ):
+    return self.ctype(sum([ self.flags[x] for x in set(data) ]))
+class UNSHARE_FLAGS(FLAGS):
+  ctype = ctypes.c_int
+  flags = { 'CLONE_NEWNS':0x00020000, 'CLONE_NEWUTS':0x04000000, 'CLONE_NEWIPC':0x08000000, 'CLONE_NEWUSER':0x10000000, 'CLONE_NEWPID':0x20000000, 'CLONE_NEWNET':0x40000000 }
+class MOUNT_FLAGS(FLAGS):
+  ctype = ctypes.c_ulong
+  flags = { 'MS_RDONLY':1, 'MS_NOSUID':2, 'MS_NODEV':4, 'MS_NOEXEC':8, 'MS_SYNCHRONOUS':16, 'MS_REMOUNT':32, 'MS_MANDLOCK':64, 'MS_DIRSYNC':128, 'MS_NOATIME':1024, 'MS_NODIRATIME':2048, 'MS_BIND':4096, 'MS_MOVE':8192, 'MS_REC':16384, 'MS_SILENT':32768, 'MS_POSIXACL':(1<<16), 'MS_UNBINDABLE':(1<<17), 'MS_PRIVATE':(1<<18), 'MS_SLAVE':(1<<19), 'MS_SHARED':(1<<20), 'MS_RELATIME':(1<<21), 'MS_KERNMOUNT':(1<<22), 'MS_I_VERSION':(1<<23), 'MS_STRICTATIME':(1<<24), 'MS_NOSEC':(1<<28), 'MS_BORN':(1<<29), 'MS_ACTIVE':(1<<30), 'MS_NOUSER':(1<<31) }
+
 libc = ctypes.CDLL( ctypes.util.find_library('c'), use_errno=True )
 # int mount( source, target, filesystemtype, mountflags, data)
-libc.mount.argtypes = [ ctypes.c_char_p, ctypes.c_char_p, ctypes.c_char_p, ctypes.c_ulong, ctypes.c_char_p ]
+libc.mount.argtypes = [ ctypes.c_char_p, ctypes.c_char_p, ctypes.c_char_p, MOUNT_FLAGS, ctypes.c_char_p ]
 # int setns(int fd, int nstype)
 libc.setns.argtypes = [ ctypes.c_int, ctypes.c_int ]
 # int unshare(int flags)
-libc.unshare.argtypes = [ ctypes.c_int ]
+libc.unshare.argtypes = [ UNSHARE_FLAGS ]
 # int prctl(int option, unsigned long arg2, unsigned long arg3, unsigned long arg4, unsigned long arg5)
 libc.prctl.argtypes = [ ctypes.c_int, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong ]
-class CLONE_FLAGS(object):
-  flags = [
-    (0x00020000, 'CLONE_NEWNS'),
-    (0x04000000, 'CLONE_NEWUTS'),
-    (0x08000000, 'CLONE_NEWIPC'),
-    (0x10000000, 'CLONE_NEWUSER'),
-    (0x20000000, 'CLONE_NEWPID'),
-    (0x40000000, 'CLONE_NEWNET'),
-    ]
-  @classmethod
-  def from_param(cls, data):
-    return c_uint(encode_flags(self.flags, data))
 
 def bytes2human( value, long_names=False ):
   mapping = {0:'B',10:'KiB',20:'MiB',30:'GiB',40:'TiB',50:'PiB',60:'EiB',70:'ZiB',80:'YiB'}
@@ -101,7 +101,7 @@ def parse_arguments():
     die("Couldn't find application executable for \"{}\"".format(arguments['<application>']))
   config['app_arguments'] = arguments['<arguments>']
   config['app_basename'] = os.path.basename(arguments['<application>'])
-  config['unshare_flags'] = [ 'CLONE_NEWNS', 'CLONE_NEWPID' ]
+  config['unshare_flags'] = [ 'CLONE_NEWNS', 'CLONE_NEWPID', 'CLONE_NEWIPC', 'CLONE_NEWNET' ]
   config['hashtool'] = arguments['--hash']
   config['teardown_timeout'] = int(arguments['--teardown-timeout'])
   config['app_path_hash'] = subprocess.Popen([config['hashtool']],stdout=subprocess.PIPE,stdin=subprocess.PIPE,stderr=subprocess.DEVNULL).communicate(config['app_path'].encode()+b'\n')[0].decode().split(' ')[0] # extra newline for compability with bash script version
@@ -259,7 +259,8 @@ def main():
     answer = input('Do you want to close it? [y/N] ')
     if answer.lower() not in [ 'y', 'yes' ]:
       sys.exit(2)
-    try_close_container(config)
+    if not try_close_container(config):
+      die("Timed out while trying to close container")
   luks_open_container( config )
   if config['do_mkfs']:
     if not config['mkfs']:
@@ -282,11 +283,11 @@ def main():
   config['realsize']=bytes2human( os.stat(config['container']).st_blocks*512, long_names=True )
   logging.info("Container currently uses {realsize}".format(**config))
   logging.info("Setting up virtual environment for opened container")
-  r,w=os.pipe()
-  r,w=os.fdopen(r,'r'), os.fdopen(w,'w')
+  #r,w=os.pipe()
+  #r,w=os.fdopen(r,'r'), os.fdopen(w,'w')
   child_pid = os.fork()
   if child_pid:
-    w.close()
+    #w.close()
     def parent_sigterm_handler( signr, stack ):
       logging.info("Forwarding SIGTERM to child and waiting for it to finish")
       os.kill( child_pid, signal.SIGTERM )
@@ -312,32 +313,63 @@ def main():
     config['parent'] = False
     PR_SET_PDEATHSIG=1
     libc.prctl( PR_SET_PDEATHSIG, signal.SIGTERM, 0, 0, 0 )
-    r.close()
-    def application_exit_helper( application, config ):
+    #r.close()
+    def application_exit_helper( application, initproc, config ):
       deadline = datetime.datetime.utcnow() + datetime.timedelta(seconds=config['teardown_timeout']-2)
       while not application.returncode:
         logging.info("Subprocess still alive. Sending SIGTERM")
-        os.kill( application.pid, signal.SIGTERM )
+        application.send_signal( signal.SIGTERM )
         if datetime.datetime.utcnow() > deadline:
           logging.info("Timed out. Sending SIGKILL")
-          os.kill( application.pid, signal.SIGKILL )
+          application.send_signal( signal.SIGKILL )
           break
         time.sleep(2)
         if not application.returncode:
           logging.info("Retrying")
+      initproc.send_signal( signal.SIGKILL )
+    if libc.unshare( config['unshare_flags'] ) is not 0:
+      die("Unshare failed")
+
+    if 'CLONE_NEWPID' in config['unshare_flags']:
+      if libc.mount( b'none', b'/', ctypes.c_char_p(0), ['MS_REC','MS_PRIVATE'], ctypes.c_char_p(0) ) is not 0:
+        die('Changing mount propagation of / to private failed')
+
+    # change to root
+    os.chdir('/')
+    # start init
+    initproc = subprocess.Popen(['sleep','infinity'])
+
+    if 'CLONE_NEWPID' in config['unshare_flags']:
+      if libc.mount( b'none', b'/proc', ctypes.c_char_p(0), 
+                     ['MS_REC','MS_PRIVATE'], ctypes.c_char_p(0) ) is not 0:
+        die('Changing mount propagation of /proc to private failed: {}'.format(os.strerror(ctypes.get_errno())))
+      if libc.mount( b'proc', b'/proc', b'proc', 
+                     ['MS_NOSUID','MS_NOEXEC','MS_NODEV'], ctypes.c_char_p(0) ) is not 0:
+        # TODO FIXME
+        workaround = subprocess.run(['mount','proc','-o','nosuid,noexec,nodev','-t','proc','/proc'])
+        if workaround.returncode is not 0:
+          die('Mount private /proc failed: {}'.format(os.strerror(ctypes.get_errno())))
+
+    # mount home
+    if libc.mount( 
+         config['open_container'].encode(), 
+         config['HOME'].encode(), 
+         config['fs_type'].encode(), 
+         [], ctypes.c_char_p(0) ) is not 0:
+      logging.error('Mount private home failed: {}'.format(os.strerror(ctypes.get_errno())))
+
+
     application = subprocess.Popen([config['app_path']]+config['app_arguments'])
     def child_sigterm_handler( signr, stack ):
-      application_exit_helper( application, config )
+      application_exit_helper( application, initproc, config )
     signal.signal( signal.SIGTERM, child_sigterm_handler )
-    #atexit.register( application_exit_helper, application, config )
     try:
       sys.stdout, sys.stderr = application.communicate( sys.stdin )
     except KeyboardInterrupt:
       application.send_signal( signal.SIGINT )
 
-    # see
-    # https://github.com/karelzak/util-linux/blob/master/sys-utils/unshare.c
-    # https://github.com/karelzak/util-linux/blob/master/sys-utils/mount.c
+    logging.info("Killing init process")
+    initproc.send_signal( signal.SIGKILL )
 
 
 
