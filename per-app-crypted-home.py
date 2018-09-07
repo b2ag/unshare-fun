@@ -28,11 +28,12 @@ Options:
   --skip-xdg-runtime-dir          Skip shadowing of XDG_RUNTIME_DIR
   -v, --verbose                   Verbose logging output 
   --version                       Shows version and exits
-  -x, --xhost-add-localuser       Add current user via xhost to X access control list
+  -x, --xauth-add                 Add xauth cookie
   -t, --tcpdump                   Dump reduced version of network traffic with tcpdump
   --teardown-timeout=SECONDS      Timeout for closing the container in seconds [default: 10]
 """
 import atexit
+import binascii
 import ctypes
 import ctypes.util
 import datetime
@@ -127,7 +128,7 @@ def parse_arguments():
   config['parent'] = True
   config['parent_pid'] = os.getpid()
   config['do_nat'] = arguments['--nat']
-  config['do_xhost_add'] = arguments['--xhost-add-localuser']
+  config['configure_xauth'] = arguments['--xauth-add']
   config['hide_xgd_runtime_dir'] = not arguments['--skip-xdg-runtime-dir']
   config['xdg_runtime_dir'] = os.getenv('XDG_RUNTIME_DIR')
   config['mac_address'] = arguments['--mac-address']
@@ -160,6 +161,8 @@ def parse_arguments():
   config['size'] = arguments['--size'].upper()
   if not human2bytes(config['size']):
     die("Can't parse size argument \"{}\"".format(config['size']))
+  config['xauth_key'] = binascii.hexlify(os.urandom(16))
+  config['do_xauth'] = True
   return config
 
 def escalate_priviledges( config ):
@@ -312,9 +315,17 @@ def main():
   logging.info("Container currently uses {realsize}".format(**config))
 
   # xhost add
-  if config['do_xhost_add']:
-    logging.warning('Running xhost si:localuser:{user}'.format(**config))
-    subprocess.run(['xhost','si:localuser:{user}'.format(**config)])
+  if config['configure_xauth']:
+    #logging.warning('Running xhost si:localuser:{user}'.format(**config))
+    #subprocess.run(['xhost','si:localuser:{user}'.format(**config)])
+    auth_file = False
+    pgrep = subprocess.check_output(['pgrep','-a','X'])
+    match = re.search(b'.* -auth (/[^ ]+)',pgrep)
+    if match:
+      config['xauth_file'] = match.group(1).decode()
+      logging.info('Xauth adding "{net_name}/unix:0" to "{xauth_file}"'.format(**config))
+      if os.path.exists(config['xauth_file']):
+        subprocess.run(['xauth','-f',config['xauth_file'],'add','{net_name}/unix:0'.format(**config),'.',config['xauth_key']])
 
   logging.info("Setting up virtual environment for opened container")
 
@@ -326,6 +337,11 @@ def main():
       if os.path.exists( config['cg_memory_sub'] ): os.rmdir( config['cg_memory_sub'] )
       if os.path.exists( config['cg_cpu_sub'] ): os.rmdir( config['cg_cpu_sub'] )
     atexit.register( clear_cgroup_subs )
+    def revert_xauth_changes():
+      if os.path.exists(config['xauth_file']):
+        logging.info('Xauth removing "{net_name}/unix:0" from "{xauth_file}"'.format(**config))
+        subprocess.run(['xauth','-f',config['xauth_file'],'remove','{net_name}/unix:0'.format(**config)])
+    if config['configure_xauth']: atexit.register( revert_xauth_changes )
     def parent_sigterm_handler( signr, stack ):
       logging.info("Forwarding SIGTERM to child and waiting for it to finish")
       os.kill( child_pid, signal.SIGTERM )
@@ -550,6 +566,33 @@ def main():
         ]
       for rule in allow_list:
         open( '{}/devices.allow'.format( config['cg_devices_sub']), 'w' ).write(rule)
+
+    # hide tmp and bind .X11-unix
+    if 'CLONE_NEWNS' in config['unshare_flags']:
+      private_x11_unix = '{}/.X11-unix'.format(private_space)
+      if os.path.exists('/tmp/.X11-unix'):
+        os.mkdir(private_x11_unix.encode())
+        if libc.mount( b'/tmp/.X11-unix', private_x11_unix.encode(), ctypes.c_char_p(0), ['MS_BIND'], ctypes.c_char_p(0) ) is not 0:
+          die('Could not bind "/tmp/.X11-unix" to private space: {}'.format(os.strerror(ctypes.get_errno())))
+      if libc.mount( b'tmpfs', b'/tmp', b'tmpfs', ['MS_NOSUID','MS_NOEXEC','MS_NODEV'], ctypes.c_char_p(0) ) is not 0:
+        die('Could not hide "/tmp": {}'.format(os.strerror(ctypes.get_errno())))
+      if os.path.exists(private_x11_unix):
+        os.mkdir('/tmp/.X11-unix')
+        if libc.mount( private_x11_unix.encode(), b'/tmp/.X11-unix', ctypes.c_char_p(0), ['MS_BIND'], ctypes.c_char_p(0) ) is not 0:
+          die('Could not bind private space to "/tmp/.X11-unix": {}'.format(os.strerror(ctypes.get_errno())))
+        if libc.umount( private_x11_unix.encode() ) is not 0:
+          logging.warning('Could not unmount private space for .X11-unix')
+        else:
+          os.rmdir( private_x11_unix )
+      
+
+    if config['configure_xauth']:
+      new_xauth_file = '{home}/.Xauthority2'.format(**config)
+      os.environ['XAUTHORITY'] = new_xauth_file
+      open( new_xauth_file, 'wb' ).truncate( 0 )
+      subprocess.run(['xauth','-f',new_xauth_file,'add','{net_name}/unix:0'.format(**config),'.',config['xauth_key']])
+      os.chown( new_xauth_file, config['uid'], config['gid'] )
+      atexit.register( subprocess.run, ['xauth','remove','{net_name}/unix:0'.format(**config)] )
 
     # our su implementation
     def change_user():
