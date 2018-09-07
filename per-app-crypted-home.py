@@ -382,7 +382,7 @@ def main():
     # bind dirs feature
     if 'CLONE_NEWNS' in config['unshare_flags']:
       for bind_dir in config['bind_dirs']:
-        os.mkdir('{}/{}'.format(private_space,bind_dir))
+        os.makedirs('{}/{}'.format(private_space,bind_dir))
         if libc.mount( 
            '{}/{}'.format(config['home'],bind_dir).encode(), 
            '{}/{}'.format(private_space,bind_dir).encode(), 
@@ -489,10 +489,8 @@ def main():
           logging.error('2nd Bind mount "{}" failed: {}'.format(bind_dir,os.strerror(ctypes.get_errno())))
         if libc.umount( '{}/{}'.format(private_space,bind_dir).encode() ) is not 0:
           logging.warning('Umount cleanup for bind dir "{}" failed'.format(bind_dir))
-        try:
-          os.rmdir( '{}/{}'.format(private_space,bind_dir) )
-        except:
-          pass
+      for bind_dir in config['bind_dirs']:
+        os.removedirs( '{}/{}'.format(private_space,bind_dir) )
 
     # our su implementation
     def change_user():
