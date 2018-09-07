@@ -130,6 +130,7 @@ def parse_arguments():
   config['xdg_runtime_dir'] = os.getenv('XDG_RUNTIME_DIR')
   config['mac_address'] = arguments['--mac-address']
   config['bind_dirs'] = arguments['-b']
+  config['do_tcpdump'] = arguments['--tcpdump']
   config['do_launch_dbus'] = not arguments['--skip-dbus-launch']
   if arguments['--skip-ipc']:
     config['unshare_flags'].remove('CLONE_NEWIPC')
@@ -424,7 +425,6 @@ def main():
       if config['do_nat']:
         subprocess.run(['sh','-c','echo 1 > /proc/sys/net/ipv4/conf/{net_name}/forwarding'.format(**config)],preexec_fn=set_parent_ns)
         default_route_interfaces = subprocess.check_output(['sh','-c','ip route show default |grep -o " dev [^ ]*"|cut -d" " -f3-'],preexec_fn=set_parent_ns).strip().decode().split(' ')
-        logging.debug(default_route_interfaces)
         for default_route_interface in default_route_interfaces:
           if not default_route_interface: continue
           logging.warning('Configuring network interface "{}" for masquerading'.format(default_route_interface))
@@ -432,6 +432,11 @@ def main():
           cmd='iptables -t nat -C POSTROUTING -o {} -j MASQUERADE'.format(default_route_interface)
           subprocess.run(['sh','-c','{} 2>/dev/null || {}'.format(cmd,cmd.replace('-C','-A'))],preexec_fn=set_parent_ns)
         subprocess.run(['ip','route','add','default','via',veth_host_ip4,'dev',config['net_name']])
+
+    if config['do_tcpdump'] and 'CLONE_NEWNET' in config['unshare_flags']:
+      output_filename='{}.{}.pcap'.format(config['net_name'],datetime.datetime.utcnow().strftime('%Y%m%d%H%M'))
+      tcpdump = subprocess.Popen(['tcpdump','-ni',config['net_name'],'-w',output_filename,'tcp[tcpflags] & (tcp-syn|tcp-fin) != 0 or udp or icmp'],stderr=sys.stderr)
+      atexit.register(tcpdump.send_signal,signal.SIGTERM)
 
 
     # pid namespace and /proc
