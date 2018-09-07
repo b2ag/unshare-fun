@@ -383,8 +383,6 @@ def main():
       if config['cpu_quota']:
         period = int(open( '{}/cpu.cfs_period_us'.format( config['cg_cpu_sub']), 'r' ).read())
         quota = int( period * config['cpu_quota'] )
-        logging.debug('cfs_period_us={}'.format(period))
-        logging.debug('cfs_quota_us={}'.format(quota))
         open( '{}/cpu.cfs_quota_us'.format( config['cg_cpu_sub']), 'w' ).write(str(quota))
 
 
