@@ -8,6 +8,7 @@ Runs application within an encrypted sandboxed filesystem used as home shadowing
 Options:
   -b DIRECTORY                    Bind mount given subdirectory of home into containers home
   -c, --container=FILE            File used as container for encrypted home [default: $HOME/.crypted-homes/$APPLICATION_ID]
+  --cpu-quota=FLOAT               Quota for CPU time ( 0.5 = 50% of 1 core, 4 = 100% of 4 cores )
   -f, --fs-type=TYPE              Filesystem type inside container [default: ext4]
   -h, --help                      Display this help and exits
   -H, --hash=COMMAND              Hash executable used to build application identifier [default: sha256sum]
@@ -132,6 +133,10 @@ def parse_arguments():
   config['bind_dirs'] = arguments['-b']
   config['do_tcpdump'] = arguments['--tcpdump']
   config['do_launch_dbus'] = not arguments['--skip-dbus-launch']
+  config['cg_cpu_sub'] = '/sys/fs/cgroup/cpu/{}'.format(config['net_name'])
+  config['cpu_quota'] = arguments['--cpu-quota']
+  if config['cpu_quota']:
+    config['cpu_quota'] = float(config['cpu_quota'])
   config['cg_memory_sub'] = '/sys/fs/cgroup/memory/{}'.format(config['net_name'])
   config['max_memory'] = arguments['--max-memory']
   if config['max_memory']:
@@ -314,8 +319,8 @@ def main():
   child_pid = os.fork()
   if child_pid:
     def clear_cgroup_subs():
-      if os.path.exists( config['cg_memory_sub'] ):
-        os.rmdir( config['cg_memory_sub'] )
+      if os.path.exists( config['cg_memory_sub'] ): os.rmdir( config['cg_memory_sub'] )
+      if os.path.exists( config['cg_cpu_sub'] ): os.rmdir( config['cg_cpu_sub'] )
     atexit.register( clear_cgroup_subs )
     def parent_sigterm_handler( signr, stack ):
       logging.info("Forwarding SIGTERM to child and waiting for it to finish")
@@ -368,10 +373,20 @@ def main():
     if 'CLONE_NEWCGROUP' in config['unshare_flags']:
       os.mkdir(config['cg_memory_sub'])
       open( '{}/cgroup.procs'.format( config['cg_memory_sub']), 'w' ).write(str( os.getpid() ))
+      os.mkdir(config['cg_cpu_sub'])
+      open( '{}/cgroup.procs'.format( config['cg_cpu_sub']), 'w' ).write(str( os.getpid() ))
       # set max memory usage
       if config['max_memory']:
         open( '{}/memory.limit_in_bytes'.format( config['cg_memory_sub']), 'w' ).write(str( human2bytes(config['max_memory']) ))
         open( '{}/memory.memsw.limit_in_bytes'.format( config['cg_memory_sub']), 'w' ).write(str( human2bytes(config['max_memory']) ))
+      # set cpu quota
+      if config['cpu_quota']:
+        period = int(open( '{}/cpu.cfs_period_us'.format( config['cg_cpu_sub']), 'r' ).read())
+        quota = int( period * config['cpu_quota'] )
+        logging.debug('cfs_period_us={}'.format(period))
+        logging.debug('cfs_quota_us={}'.format(quota))
+        open( '{}/cpu.cfs_quota_us'.format( config['cg_cpu_sub']), 'w' ).write(str(quota))
+
 
     # install signal handler
     def child_sigterm_handler( signr, stack ):
@@ -420,13 +435,18 @@ def main():
         'peer','name',config['net_name'],
         'netns','/proc/{}/ns/net'.format(config['parent_pid'])])
 
+    # spoof MAC address
+    if config['mac_address']:
+      if 'CLONE_NEWNET' in config['unshare_flags']:
+        subprocess.run(['ip','link','set',config['net_name'],'address',config['mac_address']])
+      else:
+        die('Refusing to spoof MAC address on shared network')
+
     # setting up network 
     if 'CLONE_NEWNET' in config['unshare_flags']:
       def change_to_parent_net_namespace():
         libc.setns( parent_net_ns.fileno(), UNSHARE_FLAGS.flags['CLONE_NEWNET'] )
       subprocess.run(['ip','link','set','lo','up'])
-      if config['mac_address']:
-        subprocess.run(['ip','link','set',config['net_name'],'address',config['mac_address']])
       subprocess.run(['ip','link','set',config['net_name'],'up'])
       subprocess.run(['ip','link','set',config['net_name'],'up'],preexec_fn=change_to_parent_net_namespace)
       random_ip_part = random.randint(0,254)

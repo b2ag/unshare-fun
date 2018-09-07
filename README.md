@@ -65,6 +65,8 @@ echo "hello world"|./per-app-crypted-home.py --key-file ~/secret_key -- "$SHELL"
 ./per-app-crypted-home.py --key-file ~/secret_key -b Downloads "$SHELL" -c "ls -la Downloads"
 # spoof network MAC address
 ./per-app-crypted-home.py --key-file ~/secret_key --mac-address c0:01:da:1a:d0:0d "$SHELL" -c "ip l |grep c0:01:da:1a:d0:0d"
+# CPU quota options
+./per-app-crypted-home.py --key-file ~/secret_key --cpu-quota 0.1 "$SHELL" -c 'for i in $( seq 1 $( grep "^processor" /proc/cpuinfo |wc -l ) ); do while true; do true; done & done; top'
 ```
 ## per-app-crypted-home.bash
 This script uses an encrypted container as home directory for the application given as argument. It unshares mountpoint, network, IPC and UTS namespaces. The script is designed as proof of concept application sandboxing wrapper. Shadowing of original home directory is intentional. To be able to mount, use dm-crypt and configure network the script needs sudo to get root access. To use X it preserves environment variables while switching between your user and root. To run X applications you need to pass "--skip-network" and "--skip-uts" or "--xhost-add-localuser" and "--nat". If you pass "--skip-network" than "--tcpdump" and "--nat" won't work.
