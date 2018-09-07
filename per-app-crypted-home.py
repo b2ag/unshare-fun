@@ -561,7 +561,6 @@ def main():
       except KeyboardInterrupt:
         application.send_signal( signal.SIGINT )
 
-    logging.info("been there, done that")
     application.terminate()
     application_exit_helper()
 
