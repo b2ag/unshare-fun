@@ -14,6 +14,7 @@ Options:
   -i, --id=APPLICATION_ID         Application identifier [default: $BASENAME-$PATHHASH]
   -k, --key-file=FILE             Use key from FILE instead of passphrase for dm-crypt
   -m, --mac-address=MAC           Spoof virtual ethernet MAC address
+  --max-memory=SIZE               Set memory limit for container
   -n, --nat                       Setup NAT for internet access
   -q, --quiet                     Suppress extra output
   -r, --resize=SIZE               Resize an existing container
@@ -79,8 +80,8 @@ def bytes2human( value, long_names=False ):
   return '{} {}'.format(int(value/(2**key)),mapping[key])
 
 def human2bytes( value ):
-  mapping = {'b':1,'k':1024,'m':1024**2,'g':1024**3,'t':1024**4,'p':1024**5,'e':1024**6,'z':1024**7,'y':1024*8}
-  match = re.search('^([0-9\.]+)\s?([bkmgtpezy])$',value.lower())
+  mapping = {'':1,'b':1,'k':1024,'m':1024**2,'g':1024**3,'t':1024**4,'p':1024**5,'e':1024**6,'z':1024**7,'y':1024*8}
+  match = re.search('^([0-9\.]+)\s?([bkmgtpezy]?)$',value.lower())
   if match:
     return round( float(match.group(1)) * mapping[match.group(2)] )
 
@@ -133,18 +134,23 @@ def parse_arguments():
   config['bind_dirs'] = arguments['-b']
   config['do_tcpdump'] = arguments['--tcpdump']
   config['do_launch_dbus'] = not arguments['--skip-dbus-launch']
+  config['cg_memory_sub'] = '/sys/fs/cgroup/memory/{}'.format(config['net_name'])
+  config['max_memory'] = arguments['--max-memory']
+  if config['max_memory']:
+    config['max_memory'] = config['max_memory'].upper()
+    if not human2bytes(config['max_memory']):
+      die("Can't parse memory limit argument \"{}\"".format(config['max_memory']))
   if arguments['--skip-ipc']:
     config['unshare_flags'].remove('CLONE_NEWIPC')
   if arguments['--skip-network']:
     config['unshare_flags'].remove('CLONE_NEWNET')
   if arguments['--skip-uts']:
     config['unshare_flags'].remove('CLONE_NEWUTS')
-  if arguments['--resize']:
-    config['resize'] = arguments['--resize'].upper()
+  config['resize'] = arguments['--resize']
+  if config['resize']:
+    config['resize'] = config['resize'].upper()
     if not human2bytes(config['resize']):
       die("Can't parse resize argument \"{}\"".format(config['resize']))
-  else:
-    config['resize'] = False
   config['size'] = arguments['--size'].upper()
   if not human2bytes(config['size']):
     die("Can't parse size argument \"{}\"".format(config['size']))
@@ -316,6 +322,10 @@ def main():
   # forking because we can
   child_pid = os.fork()
   if child_pid:
+    def clear_cgroup_subs():
+      if os.path.exists( config['cg_memory_sub'] ):
+        os.rmdir( config['cg_memory_sub'] )
+    atexit.register( clear_cgroup_subs )
     def parent_sigterm_handler( signr, stack ):
       logging.info("Forwarding SIGTERM to child and waiting for it to finish")
       os.kill( child_pid, signal.SIGTERM )
@@ -323,7 +333,7 @@ def main():
       while True:
         pid, returncode = os.waitpid( child_pid, os.WNOHANG )
         if ( pid, returncode ) != ( 0, 0 ):
-          sys.exit(returncode>>8)
+          sys.exit( returncode>>8|returncode&0xff )
         if datetime.datetime.utcnow() > deadline:
           logging.info("Timed out")
           sys.exit(1)
@@ -333,7 +343,7 @@ def main():
     while True:
       try:
         pid, returncode = os.waitpid( child_pid, 0 )
-        sys.exit( returncode>>8 )
+        sys.exit( returncode>>8|returncode&0xff )
       except KeyboardInterrupt:
         # forward CTRL+C and continue waiting
         os.kill( child_pid, signal.SIGINT )
@@ -343,29 +353,6 @@ def main():
     # make sure we get a signal when parent dies
     PR_SET_PDEATHSIG=1
     libc.prctl( PR_SET_PDEATHSIG, signal.SIGTERM, 0, 0, 0 )
-
-    # teardown
-    def application_exit_helper( application, initproc, config ):
-      deadline = datetime.datetime.utcnow() + datetime.timedelta(seconds=config['teardown_timeout']-2)
-      while not application.returncode:
-        logging.info("Subprocess still alive. Sending SIGTERM")
-        application.send_signal( signal.SIGTERM )
-        if datetime.datetime.utcnow() > deadline:
-          logging.info("Timed out. Sending SIGKILL")
-          application.send_signal( signal.SIGKILL )
-          sys.exit(1)
-          break
-        time.sleep(2)
-        if not application.returncode:
-          logging.info("Retrying")
-      sys.exit(application.returncode)
-
-    # cgroup experiment
-    if 'CLONE_NEWCGROUP' in config['unshare_flags']:
-      cg_memory_sub = '/sys/fs/cgroup/memory/{}'.format(config['net_name'])
-      os.mkdir(cg_memory_sub)
-      open('{}/cgroup.procs'.format(cg_memory_sub),'w').write(str(os.getpid()))
-      atexit.register( os.rmdir, cg_memory_sub )
 
     # call unshare function
     if libc.unshare( config['unshare_flags'] ) is not 0:
@@ -381,9 +368,36 @@ def main():
       libc.setns( parent_pid_ns.fileno(), UNSHARE_FLAGS.flags['CLONE_NEWPID'] )
       libc.setns( parent_net_ns.fileno(), UNSHARE_FLAGS.flags['CLONE_NEWNET'] )
 
+    # unshare mountpoints
     if 'CLONE_NEWNS' in config['unshare_flags']:
       if libc.mount( b'none', b'/', ctypes.c_char_p(0), ['MS_REC','MS_PRIVATE'], ctypes.c_char_p(0) ) is not 0:
         die('Changing mount propagation of / to private failed')
+
+    # cgroup experiment
+    if 'CLONE_NEWCGROUP' in config['unshare_flags']:
+      os.mkdir(config['cg_memory_sub'])
+      open( '{}/cgroup.procs'.format( config['cg_memory_sub']), 'w' ).write(str( os.getpid() ))
+      # set max memory usage
+      if config['max_memory']:
+        open( '{}/memory.limit_in_bytes'.format( config['cg_memory_sub']), 'w' ).write(str( human2bytes(config['max_memory']) ))
+        open( '{}/memory.memsw.limit_in_bytes'.format( config['cg_memory_sub']), 'w' ).write(str( human2bytes(config['max_memory']) ))
+
+    # install signal handler
+    def child_sigterm_handler( signr, stack ):
+      sys.exit(242)
+    signal.signal( signal.SIGTERM, child_sigterm_handler )
+
+    # start init
+    initproc = subprocess.Popen(['sleep','infinity'])
+    def init_exit_handler():
+      if initproc.poll() is None:
+        initproc.terminate()
+        try:
+          sys.stdout, sys.stderr = initproc.communicate( sys.stdin, timeout=2 )
+        except subprocess.TimeoutExpired:
+          pass
+      initproc.kill()
+    atexit.register( init_exit_handler )
 
     # get a private space
     if 'CLONE_NEWNS' in config['unshare_flags']:
@@ -402,14 +416,6 @@ def main():
            ctypes.c_char_p(0), 
            ['MS_BIND'], ctypes.c_char_p(0) ) is not 0:
           die('Bind mount "{}" failed: {}'.format(bind_dir,os.strerror(ctypes.get_errno())))
-
-    # start init
-    initproc = subprocess.Popen(['sleep','infinity'])
-    # install signal handler
-    def child_sigterm_handler( signr, stack ):
-      application_exit_helper( application, initproc, config )
-    signal.signal( signal.SIGTERM, child_sigterm_handler )
-    atexit.register( initproc.send_signal, signal.SIGKILL )
 
     # uts namespace
     if 'CLONE_NEWUTS' in config['unshare_flags']:
@@ -520,17 +526,44 @@ def main():
 
     # launch dbus
     if config['do_launch_dbus']:
-      dbus_session_address=subprocess.check_output(['dbus-daemon','--session','--fork','--address=unix:path={xdg_runtime_dir}/bus-{net_name}'.format(**config),'--nosyslog','--print-address'],preexec_fn=change_user).strip()
-      os.environ['DBUS_SESSION_BUS_ADDRESS'] = dbus_session_address.decode()
+      dbus = subprocess.Popen(['dbus-daemon','--session','--address=unix:path={xdg_runtime_dir}/bus-{net_name}'.format(**config),'--nosyslog','--print-address'],stdout=subprocess.PIPE,preexec_fn=change_user)
+      dbus_address = dbus.stdout.readline().strip()
+      os.environ['DBUS_SESSION_BUS_ADDRESS'] = dbus_address.decode()
 
     # finally launch our application ...
-    application = subprocess.Popen([config['app_path']]+config['app_arguments'], preexec_fn=change_user )
-    try:
-      sys.stdout, sys.stderr = application.communicate( sys.stdin )
-    except KeyboardInterrupt:
-      application.send_signal( signal.SIGINT )
+    application = subprocess.Popen([config['app_path']]+config['app_arguments'],preexec_fn=change_user )
 
-    sys.exit(application.returncode)
+    # teardown helper
+    def application_exit_helper():
+      logging.info('Teardown initiated...')
+      deadline = datetime.datetime.utcnow() + datetime.timedelta(seconds=config['teardown_timeout']-2)
+      while application.poll() is None:
+        logging.info("Subprocess still alive ({}). Sending SIGTERM".format(application.pid))
+        application.terminate()
+        if datetime.datetime.utcnow() > deadline:
+          logging.info("Timed out. Sending SIGKILL")
+          application.kill()
+          sys.exit(1)
+          break
+        try:
+          sys.stdout, sys.stderr = application.communicate( sys.stdin, timeout=1 )
+          time.sleep( 1 )
+        except subprocess.TimeoutExpired:
+          pass
+        if not application.returncode:
+          logging.info("Retrying")
+      sys.exit(application.returncode)
+
+    # connect stdin, stdout and stderr to application
+    while application.poll() is None:
+      try:
+        sys.stdout, sys.stderr = application.communicate( sys.stdin )
+      except KeyboardInterrupt:
+        application.send_signal( signal.SIGINT )
+
+    logging.info("been there, done that")
+    application.terminate()
+    application_exit_helper()
 
 if __name__ == "__main__":
   main()
