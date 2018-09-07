@@ -38,6 +38,7 @@ from docopt import docopt
 import logging
 import math
 import os
+import pathlib
 import pwd
 import random
 import re
@@ -269,11 +270,12 @@ def main():
     if not os.path.exists( config['container'] ):
       config['do_mkfs'] = True
       create_empty_container( config )
-      luks_format_container( config )
     escalate_priviledges( config )
-  decide_about_resize( config )
   if not os.path.exists( config['container'] ):
     die("Container \"{container}\" does not exist".format(**config))
+  if config['do_mkfs']:
+    luks_format_container( config )
+  decide_about_resize( config )
   if os.path.exists( config['open_container'] ):
     logging.warning('Container already open at "{open_container}"'.format(**config))
     answer = input('Do you want to close it? [y/N] ')
@@ -372,7 +374,7 @@ def main():
 
     # get a private space
     if 'CLONE_NEWNS' in config['unshare_flags']:
-      private_space='/run/{}'.format(sys.argv[0])
+      private_space='/run/{}'.format(os.path.basename(sys.argv[0]))
       os.makedirs(private_space, exist_ok=True, mode=0o700)
       if libc.mount( b'tmpfs', private_space.encode(), b'tmpfs', ['MS_NOSUID','MS_NOEXEC','MS_NODEV'], ctypes.c_char_p(0) ) is not 0:
         die('Could not create a private space: {}'.format(os.strerror(ctypes.get_errno())))
@@ -380,7 +382,7 @@ def main():
     # bind dirs feature
     if 'CLONE_NEWNS' in config['unshare_flags']:
       for bind_dir in config['bind_dirs']:
-        os.mkdir('{}/{}'.format(private_space,bind_dir))
+        os.makedirs('{}/{}'.format(private_space,bind_dir))
         if libc.mount( 
            '{}/{}'.format(config['home'],bind_dir).encode(), 
            '{}/{}'.format(private_space,bind_dir).encode(), 
@@ -424,7 +426,7 @@ def main():
       subprocess.run(['ip','address','add','{}/{}'.format(veth_host_ip4,veth_subnet4),'dev',config['net_name']],preexec_fn=change_to_parent_net_namespace)
       if config['do_nat']:
         subprocess.run(['sh','-c','echo 1 > /proc/sys/net/ipv4/conf/{net_name}/forwarding'.format(**config)],preexec_fn=set_parent_ns)
-        default_route_interfaces = subprocess.check_output(['sh','-c','ip route show default |grep -o " dev [^ ]*"|cut -d" " -f3-'],preexec_fn=set_parent_ns).strip().decode().split(' ')
+        default_route_interfaces = subprocess.check_output(['sh','-c','ip route show default |grep -o " dev [^ ]*"|cut -d" " -f3-'],preexec_fn=set_parent_ns).strip().decode().split('\n')
         for default_route_interface in default_route_interfaces:
           if not default_route_interface: continue
           logging.warning('Configuring network interface "{}" for masquerading'.format(default_route_interface))
@@ -435,8 +437,11 @@ def main():
 
     if config['do_tcpdump'] and 'CLONE_NEWNET' in config['unshare_flags']:
       output_filename='{}.{}.pcap'.format(config['net_name'],datetime.datetime.utcnow().strftime('%Y%m%d%H%M'))
+      pathlib.Path( output_filename ).touch( mode=0o600 )
+      os.chown( output_filename, config['uid'], config['gid'] )
       tcpdump = subprocess.Popen(['tcpdump','-ni',config['net_name'],'-w',output_filename,'tcp[tcpflags] & (tcp-syn|tcp-fin) != 0 or udp or icmp'],stderr=sys.stderr)
-      atexit.register(tcpdump.send_signal,signal.SIGTERM)
+      atexit.register( tcpdump.wait, timeout=config['teardown_timeout']/2 )
+      atexit.register( tcpdump.send_signal, signal.SIGTERM )
 
 
     # pid namespace and /proc
@@ -490,10 +495,8 @@ def main():
           logging.error('2nd Bind mount "{}" failed: {}'.format(bind_dir,os.strerror(ctypes.get_errno())))
         if libc.umount( '{}/{}'.format(private_space,bind_dir).encode() ) is not 0:
           logging.warning('Umount cleanup for bind dir "{}" failed'.format(bind_dir))
-        try:
-          os.rmdir( '{}/{}'.format(private_space,bind_dir) )
-        except:
-          pass
+      for bind_dir in config['bind_dirs']:
+        os.removedirs( '{}/{}'.format(private_space,bind_dir) )
 
     # our su implementation
     def change_user():
