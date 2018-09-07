@@ -250,7 +250,7 @@ def decide_about_resize( config ):
     if new_size > current_size:
       logging.info("Inflating container file")
       config['resize_mode'] = 'expand'
-      with open( config['container'], 'ab' ) as f: f.truncate( human2bytes( config['size'] ) )
+      with open( config['container'], 'ab' ) as f: f.truncate( human2bytes( config['resize'] ) )
     elif new_size < current_size:
       config['resize_mode'] = 'shrink'
     else:
@@ -297,6 +297,7 @@ def main():
     fsck_open_container( config )
     if config['resize'] and config['resize_mode'] is 'shrink':
       logging.info("Shrinking container file")
+      with open( config['container'], 'ab' ) as f: f.truncate( human2bytes( config['resize'] ) )
 
   # real size of sparse container file
   config['realsize']=bytes2human( os.stat(config['container']).st_blocks*512, long_names=True )
