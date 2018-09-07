@@ -206,7 +206,7 @@ def luks_format_container( config ):
     die("LUKS format failed")
 
 def luks_open_container( config ):
-  logging.info('LUKS opening container')
+  logging.info('LUKS opening container \"{container}\"'.format(**config))
   file_output = subprocess.check_output(['file',config['container']])
   if file_output.find(b'LUKS encrypted file') == -1:
     die("Container missing a LUKS header. Refusing to open it.")
@@ -490,10 +490,10 @@ def main():
          config['fs_type'].encode(), 
          [], ctypes.c_char_p(0) ) is not 0:
       die('Mount private home failed: {}'.format(os.strerror(ctypes.get_errno())))
-    # chown fresh home
+    # chown&chmod fresh home
     if config['do_mkfs']:
-      if subprocess.run([ 'chown', '{}:{}'.format(config['uid'],config['gid']) , config['home'] ]).returncode is not 0:
-        logging.error('Could not change owner of new home: {}'.format(os.strerror(ctypes.get_errno())))
+      os.chown( config['home'], config['uid'], config['gid'] )
+      os.chmod( config['home'], 0o700 )
     # change directory to new home
     os.chdir(config['home'])
 
