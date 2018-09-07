@@ -317,7 +317,7 @@ def main():
       while True:
         pid, returncode = os.waitpid( child_pid, os.WNOHANG )
         if ( pid, returncode ) != ( 0, 0 ):
-          sys.exit(returncode)
+          sys.exit(returncode>>8)
         if datetime.datetime.utcnow() > deadline:
           logging.info("Timed out")
           sys.exit(1)
@@ -327,7 +327,7 @@ def main():
     while True:
       try:
         pid, returncode = os.waitpid( child_pid, 0 )
-        sys.exit( returncode )
+        sys.exit( returncode>>8 )
       except KeyboardInterrupt:
         # forward CTRL+C and continue waiting
         os.kill( child_pid, signal.SIGINT )
