@@ -123,6 +123,9 @@ def parse_arguments():
   config['parent'] = True
   config['parent_pid'] = os.getpid()
   config['do_nat'] = arguments['--nat']
+  config['do_xhost_add'] = arguments['--xhost-add-localuser']
+  config['hide_xgd_runtime_dir'] = not arguments['--skip-xdg-runtime-dir']
+  config['mac_address'] = arguments['--mac-address']
   if arguments['--resize']:
     config['resize'] = arguments['--resize'].upper()
     if not human2bytes(config['resize']):
@@ -287,6 +290,9 @@ def main():
 
   config['realsize']=bytes2human( os.stat(config['container']).st_blocks*512, long_names=True )
   logging.info("Container currently uses {realsize}".format(**config))
+  if config['do_xhost_add']:
+    logging.warning('Running xhost si:localuser:{user}'.format(**config))
+    subprocess.run(['xhost','si:localuser:{user}'.format(**config)])
   logging.info("Setting up virtual environment for opened container")
   #r,w=os.pipe()
   #r,w=os.fdopen(r,'r'), os.fdopen(w,'w')
@@ -375,6 +381,8 @@ def main():
       def change_to_parent_net_namespace():
         libc.setns( parent_net_ns.fileno(), UNSHARE_FLAGS.flags['CLONE_NEWNET'] )
       subprocess.run(['ip','link','set','lo','up'])
+      if config['mac_address']:
+        subprocess.run(['ip','link','set',config['net_name'],'address',config['mac_address']])
       subprocess.run(['ip','link','set',config['net_name'],'up'])
       subprocess.run(['ip','link','set',config['net_name'],'up'],preexec_fn=change_to_parent_net_namespace)
       random_ip_part = random.randint(0,254)
@@ -384,15 +392,15 @@ def main():
       subprocess.run(['ip','address','add','{}/{}'.format(veth_vm_ip4,veth_subnet4),'dev',config['net_name']])
       subprocess.run(['ip','address','add','{}/{}'.format(veth_host_ip4,veth_subnet4),'dev',config['net_name']],preexec_fn=change_to_parent_net_namespace)
       if config['do_nat']:
-        #subprocess.run(['sh','-c','echo 1 > /proc/sys/net/ipv4/conf/{net_name}/forwarding'.format(**config)])
-        default_route_interfaces = subprocess.check_output(['sh','-c','ip route show default |grep -o " dev [^ ]*"|cut -d" " -f3-'],preexec_fn=set_parent_ns).split(b' ')
+        subprocess.run(['sh','-c','echo 1 > /proc/sys/net/ipv4/conf/{net_name}/forwarding'.format(**config)],preexec_fn=set_parent_ns)
+        default_route_interfaces = subprocess.check_output(['sh','-c','ip route show default |grep -o " dev [^ ]*"|cut -d" " -f3-'],preexec_fn=set_parent_ns).strip().decode().split(' ')
         logging.debug(default_route_interfaces)
         for default_route_interface in default_route_interfaces:
           if not default_route_interface: continue
           logging.warning('Configuring network interface "{}" for masquerading'.format(default_route_interface))
           subprocess.run(['sh','-c','echo 1 > /proc/sys/net/ipv4/conf/{}/forwarding'.format(default_route_interface)],preexec_fn=set_parent_ns)
           cmd='iptables -t nat -C POSTROUTING -o {} -j MASQUERADE'.format(default_route_interface)
-          subprocess.run(['sh','-c','{} || {}'.format(cmd,cmd.replace('-C','-A'))],preexec_fn=set_parent_ns)
+          subprocess.run(['sh','-c','{} 2>/dev/null || {}'.format(cmd,cmd.replace('-C','-A'))],preexec_fn=set_parent_ns)
         subprocess.run(['ip','route','add','default','via',veth_host_ip4,'dev',config['net_name']])
 
 
