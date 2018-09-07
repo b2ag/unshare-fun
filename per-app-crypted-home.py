@@ -302,17 +302,20 @@ def main():
     if config['resize'] and config['resize_mode'] is 'shrink':
       logging.info("Shrinking container file")
 
+  # real size of sparse container file
   config['realsize']=bytes2human( os.stat(config['container']).st_blocks*512, long_names=True )
   logging.info("Container currently uses {realsize}".format(**config))
+
+  # xhost add
   if config['do_xhost_add']:
     logging.warning('Running xhost si:localuser:{user}'.format(**config))
     subprocess.run(['xhost','si:localuser:{user}'.format(**config)])
+
   logging.info("Setting up virtual environment for opened container")
-  #r,w=os.pipe()
-  #r,w=os.fdopen(r,'r'), os.fdopen(w,'w')
+
+  # forking because we can
   child_pid = os.fork()
   if child_pid:
-    #w.close()
     def parent_sigterm_handler( signr, stack ):
       logging.info("Forwarding SIGTERM to child and waiting for it to finish")
       os.kill( child_pid, signal.SIGTERM )
@@ -336,9 +339,12 @@ def main():
         os.kill( child_pid, signal.SIGINT )
   else:
     config['parent'] = False
+
+    # make sure we get a signal when parent dies
     PR_SET_PDEATHSIG=1
     libc.prctl( PR_SET_PDEATHSIG, signal.SIGTERM, 0, 0, 0 )
-    #r.close()
+
+    # teardown
     def application_exit_helper( application, initproc, config ):
       deadline = datetime.datetime.utcnow() + datetime.timedelta(seconds=config['teardown_timeout']-2)
       while not application.returncode:
@@ -353,6 +359,13 @@ def main():
         if not application.returncode:
           logging.info("Retrying")
       sys.exit(application.returncode)
+
+    # cgroup experiment
+    if 'CLONE_NEWCGROUP' in config['unshare_flags']:
+      cg_memory_sub = '/sys/fs/cgroup/memory/{}'.format(config['net_name'])
+      os.mkdir(cg_memory_sub)
+      open('{}/cgroup.procs'.format(cg_memory_sub),'w').write(str(os.getpid()))
+      atexit.register( os.rmdir, cg_memory_sub )
 
     # call unshare function
     if libc.unshare( config['unshare_flags'] ) is not 0:
@@ -409,7 +422,8 @@ def main():
         'type','veth',
         'peer','name',config['net_name'],
         'netns','/proc/{}/ns/net'.format(config['parent_pid'])])
-    
+
+    # setting up network 
     if 'CLONE_NEWNET' in config['unshare_flags']:
       def change_to_parent_net_namespace():
         libc.setns( parent_net_ns.fileno(), UNSHARE_FLAGS.flags['CLONE_NEWNET'] )
@@ -424,6 +438,7 @@ def main():
       veth_subnet4 = '24'
       subprocess.run(['ip','address','add','{}/{}'.format(veth_vm_ip4,veth_subnet4),'dev',config['net_name']])
       subprocess.run(['ip','address','add','{}/{}'.format(veth_host_ip4,veth_subnet4),'dev',config['net_name']],preexec_fn=change_to_parent_net_namespace)
+      # setting up NAT
       if config['do_nat']:
         subprocess.run(['sh','-c','echo 1 > /proc/sys/net/ipv4/conf/{net_name}/forwarding'.format(**config)],preexec_fn=set_parent_ns)
         default_route_interfaces = subprocess.check_output(['sh','-c','ip route show default |grep -o " dev [^ ]*"|cut -d" " -f3-'],preexec_fn=set_parent_ns).strip().decode().split('\n')
@@ -435,6 +450,7 @@ def main():
           subprocess.run(['sh','-c','{} 2>/dev/null || {}'.format(cmd,cmd.replace('-C','-A'))],preexec_fn=set_parent_ns)
         subprocess.run(['ip','route','add','default','via',veth_host_ip4,'dev',config['net_name']])
 
+    # start tcpdump
     if config['do_tcpdump'] and 'CLONE_NEWNET' in config['unshare_flags']:
       output_filename='{}.{}.pcap'.format(config['net_name'],datetime.datetime.utcnow().strftime('%Y%m%d%H%M'))
       pathlib.Path( output_filename ).touch( mode=0o600 )
@@ -442,7 +458,6 @@ def main():
       tcpdump = subprocess.Popen(['tcpdump','-ni',config['net_name'],'-w',output_filename,'tcp[tcpflags] & (tcp-syn|tcp-fin) != 0 or udp or icmp'],stderr=sys.stderr)
       atexit.register( tcpdump.wait, timeout=config['teardown_timeout']/2 )
       atexit.register( tcpdump.send_signal, signal.SIGTERM )
-
 
     # pid namespace and /proc
     if 'CLONE_NEWNS' in config['unshare_flags'] and 'CLONE_NEWPID' in config['unshare_flags']:
