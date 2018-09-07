@@ -127,8 +127,10 @@ def parse_arguments():
   config['do_nat'] = arguments['--nat']
   config['do_xhost_add'] = arguments['--xhost-add-localuser']
   config['hide_xgd_runtime_dir'] = not arguments['--skip-xdg-runtime-dir']
+  config['xdg_runtime_dir'] = os.getenv('XDG_RUNTIME_DIR')
   config['mac_address'] = arguments['--mac-address']
   config['bind_dirs'] = arguments['-b']
+  config['do_launch_dbus'] = not arguments['--skip-dbus-launch']
   if arguments['--skip-ipc']:
     config['unshare_flags'].remove('CLONE_NEWIPC')
   if arguments['--skip-network']:
@@ -357,30 +359,33 @@ def main():
     parent_mnt_ns = open('/proc/{}/ns/mnt'.format(config['parent_pid']),'rb')
     parent_pid_ns = open('/proc/{}/ns/pid'.format(config['parent_pid']),'rb')
     parent_net_ns = open('/proc/{}/ns/net'.format(config['parent_pid']),'rb')
+    # helper for subprocess to switch namespaces
     def set_parent_ns():
       libc.setns( parent_mnt_ns.fileno(), UNSHARE_FLAGS.flags['CLONE_NEWNS'] )
       libc.setns( parent_pid_ns.fileno(), UNSHARE_FLAGS.flags['CLONE_NEWPID'] )
       libc.setns( parent_net_ns.fileno(), UNSHARE_FLAGS.flags['CLONE_NEWNET'] )
 
-    if 'CLONE_NEWPID' in config['unshare_flags']:
+    if 'CLONE_NEWNS' in config['unshare_flags']:
       if libc.mount( b'none', b'/', ctypes.c_char_p(0), ['MS_REC','MS_PRIVATE'], ctypes.c_char_p(0) ) is not 0:
         die('Changing mount propagation of / to private failed')
 
-    # get some private space
-    private_space='/run/{}'.format(sys.argv[0])
-    os.makedirs(private_space, exist_ok=True, mode=0o700)
-    if libc.mount( b'tmpfs', private_space.encode(), b'tmpfs', [], ctypes.c_char_p(0) ) is not 0:
-      die('Could not create a private space: {}'.format(os.strerror(ctypes.get_errno())))
+    # get a private space
+    if 'CLONE_NEWNS' in config['unshare_flags']:
+      private_space='/run/{}'.format(sys.argv[0])
+      os.makedirs(private_space, exist_ok=True, mode=0o700)
+      if libc.mount( b'tmpfs', private_space.encode(), b'tmpfs', ['MS_NOSUID','MS_NOEXEC','MS_NODEV'], ctypes.c_char_p(0) ) is not 0:
+        die('Could not create a private space: {}'.format(os.strerror(ctypes.get_errno())))
 
     # bind dirs feature
-    for bind_dir in config['bind_dirs']:
-      os.mkdir('{}/{}'.format(private_space,bind_dir))
-      if libc.mount( 
-         '{}/{}'.format(config['home'],bind_dir).encode(), 
-         '{}/{}'.format(private_space,bind_dir).encode(), 
-         ctypes.c_char_p(0), 
-         ['MS_BIND'], ctypes.c_char_p(0) ) is not 0:
-        die('Bind mount "{}" failed: {}'.format(bind_dir,os.strerror(ctypes.get_errno())))
+    if 'CLONE_NEWNS' in config['unshare_flags']:
+      for bind_dir in config['bind_dirs']:
+        os.mkdir('{}/{}'.format(private_space,bind_dir))
+        if libc.mount( 
+           '{}/{}'.format(config['home'],bind_dir).encode(), 
+           '{}/{}'.format(private_space,bind_dir).encode(), 
+           ctypes.c_char_p(0), 
+           ['MS_BIND'], ctypes.c_char_p(0) ) is not 0:
+          die('Bind mount "{}" failed: {}'.format(bind_dir,os.strerror(ctypes.get_errno())))
 
     # start init
     initproc = subprocess.Popen(['sleep','infinity'])
@@ -430,7 +435,7 @@ def main():
 
 
     # pid namespace and /proc
-    if 'CLONE_NEWPID' in config['unshare_flags']:
+    if 'CLONE_NEWNS' in config['unshare_flags'] and 'CLONE_NEWPID' in config['unshare_flags']:
       if libc.mount( b'none', b'/proc', ctypes.c_char_p(0), 
                      ['MS_REC','MS_PRIVATE'], ctypes.c_char_p(0) ) is not 0:
         die('Changing mount propagation of /proc to private failed: {}'.format(os.strerror(ctypes.get_errno())))
@@ -455,27 +460,41 @@ def main():
     # change directory to new home
     os.chdir(config['home'])
 
+    # hide /run/user/<uid>
+    if config['hide_xgd_runtime_dir']:
+      if libc.mount( b'tmpfs', os.getenv('XDG_RUNTIME_DIR').encode(), b'tmpfs', ['MS_NOSUID','MS_NOEXEC','MS_NODEV'], ctypes.c_char_p(0) ) is not 0:
+        die('Could not mount a private XDG_RUNTIME_DIR: {}'.format(os.strerror(ctypes.get_errno())))
+      os.chown(os.getenv('XDG_RUNTIME_DIR'),config['uid'],config['gid'])
+      os.chmod(os.getenv('XDG_RUNTIME_DIR'),0o700)
+    
     # bind dirs second part 
-    for bind_dir in config['bind_dirs']:
-      os.makedirs('{}/{}'.format(config['home'],bind_dir),exist_ok=True)
-      if libc.mount( 
-         '{}/{}'.format(private_space,bind_dir).encode(), 
-         '{}/{}'.format(config['home'],bind_dir).encode(), 
-         ctypes.c_char_p(0), 
-         ['MS_BIND'], ctypes.c_char_p(0) ) is not 0:
-        logging.error('2nd Bind mount "{}" failed: {}'.format(bind_dir,os.strerror(ctypes.get_errno())))
-      if libc.umount( '{}/{}'.format(private_space,bind_dir).encode() ) is not 0:
-        logging.warning('Umount cleanup for bind dir "{}" failed'.format(bind_dir))
-      try:
-        os.rmdir( '{}/{}'.format(private_space,bind_dir) )
-      except:
-        pass
+    if 'CLONE_NEWNS' in config['unshare_flags']:
+      for bind_dir in config['bind_dirs']:
+        os.makedirs('{}/{}'.format(config['home'],bind_dir),exist_ok=True)
+        if libc.mount( 
+           '{}/{}'.format(private_space,bind_dir).encode(), 
+           '{}/{}'.format(config['home'],bind_dir).encode(), 
+           ctypes.c_char_p(0), 
+           ['MS_BIND'], ctypes.c_char_p(0) ) is not 0:
+          logging.error('2nd Bind mount "{}" failed: {}'.format(bind_dir,os.strerror(ctypes.get_errno())))
+        if libc.umount( '{}/{}'.format(private_space,bind_dir).encode() ) is not 0:
+          logging.warning('Umount cleanup for bind dir "{}" failed'.format(bind_dir))
+        try:
+          os.rmdir( '{}/{}'.format(private_space,bind_dir) )
+        except:
+          pass
 
     # our su implementation
     def change_user():
       os.setgid( int(config['gid']) )
       os.setuid( int(config['uid']) )
 
+    # launch dbus
+    if config['do_launch_dbus']:
+      dbus_session_address=subprocess.check_output(['dbus-daemon','--session','--fork','--address=unix:path={xdg_runtime_dir}/bus-{net_name}'.format(**config),'--nosyslog','--print-address'],preexec_fn=change_user).strip()
+      os.environ['DBUS_SESSION_BUS_ADDRESS'] = dbus_session_address.decode()
+
+    # finally launch our application ...
     application = subprocess.Popen([config['app_path']]+config['app_arguments'], preexec_fn=change_user )
     try:
       sys.stdout, sys.stderr = application.communicate( sys.stdin )
