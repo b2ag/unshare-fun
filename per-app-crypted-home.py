@@ -270,11 +270,12 @@ def main():
     if not os.path.exists( config['container'] ):
       config['do_mkfs'] = True
       create_empty_container( config )
-      luks_format_container( config )
     escalate_priviledges( config )
-  decide_about_resize( config )
   if not os.path.exists( config['container'] ):
     die("Container \"{container}\" does not exist".format(**config))
+  if config['do_mkfs']:
+    luks_format_container( config )
+  decide_about_resize( config )
   if os.path.exists( config['open_container'] ):
     logging.warning('Container already open at "{open_container}"'.format(**config))
     answer = input('Do you want to close it? [y/N] ')
@@ -425,7 +426,7 @@ def main():
       subprocess.run(['ip','address','add','{}/{}'.format(veth_host_ip4,veth_subnet4),'dev',config['net_name']],preexec_fn=change_to_parent_net_namespace)
       if config['do_nat']:
         subprocess.run(['sh','-c','echo 1 > /proc/sys/net/ipv4/conf/{net_name}/forwarding'.format(**config)],preexec_fn=set_parent_ns)
-        default_route_interfaces = subprocess.check_output(['sh','-c','ip route show default |grep -o " dev [^ ]*"|cut -d" " -f3-'],preexec_fn=set_parent_ns).strip().decode().split(' ')
+        default_route_interfaces = subprocess.check_output(['sh','-c','ip route show default |grep -o " dev [^ ]*"|cut -d" " -f3-'],preexec_fn=set_parent_ns).strip().decode().split('\n')
         for default_route_interface in default_route_interfaces:
           if not default_route_interface: continue
           logging.warning('Configuring network interface "{}" for masquerading'.format(default_route_interface))
