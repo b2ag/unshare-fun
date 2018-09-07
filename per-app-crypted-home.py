@@ -100,8 +100,6 @@ def parse_arguments():
   elif arguments['--quiet']:
     logging.getLogger().setLevel( logging.ERROR )
     config['quiet'] = True
-  # TODO remove me
-  if os.getuid() is not 0:  logging.debug('Arguments:\n{}'.format(arguments))
   config['app_path'] = distutils.spawn.find_executable(arguments['<application>'])
   if not config['app_path']:
     die("Couldn't find application executable for \"{}\"".format(arguments['<application>']))
@@ -159,16 +157,8 @@ def parse_arguments():
 def escalate_priviledges( config ):
   if os.getuid() is not 0:
     logging.info('Need to escalate priviledges')
-    os.execvp(
-            'sudo',
-            [
-                'sudo',
-                '-E',
-                'uid={uid}'.format(**config),
-                'do_mkfs={do_mkfs:d}'.format(**config),
-            ]+sys.argv)
-  else:
-    die('Should not get here')
+    os.execvp( 'sudo', [ 'sudo', '-E', 'uid={uid}'.format(**config), 'do_mkfs={do_mkfs:d}'.format(**config) ] + sys.argv )
+  die('Should not get here')
 
 def try_close_container( config ):
   # let the parent close the container
