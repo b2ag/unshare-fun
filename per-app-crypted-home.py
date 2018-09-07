@@ -21,6 +21,7 @@ Options:
   -r, --resize=SIZE               Resize an existing container
   -s, --size=SIZE                 Maximum size of container [default: 4G]
   --skip-dbus-launch              Skip DBUS launch inside container
+  --skip-devices                  Skip restricting devices access inside container
   --skip-ipc                      Skip IPC virtualisation
   --skip-network                  Skip network virtualisation
   --skip-uts                      Skip UTS (hostname) virtualisation
@@ -137,6 +138,8 @@ def parse_arguments():
   config['cpu_quota'] = arguments['--cpu-quota']
   if config['cpu_quota']:
     config['cpu_quota'] = float(config['cpu_quota'])
+  config['cg_devices_sub'] = '/sys/fs/cgroup/devices/{}'.format(config['net_name'])
+  config['restrict_devices'] = not arguments['--skip-devices']
   config['cg_memory_sub'] = '/sys/fs/cgroup/memory/{}'.format(config['net_name'])
   config['max_memory'] = arguments['--max-memory']
   if config['max_memory']:
@@ -319,6 +322,7 @@ def main():
   child_pid = os.fork()
   if child_pid:
     def clear_cgroup_subs():
+      if os.path.exists( config['cg_devices_sub'] ): os.rmdir( config['cg_devices_sub'] )
       if os.path.exists( config['cg_memory_sub'] ): os.rmdir( config['cg_memory_sub'] )
       if os.path.exists( config['cg_cpu_sub'] ): os.rmdir( config['cg_cpu_sub'] )
     atexit.register( clear_cgroup_subs )
@@ -371,19 +375,21 @@ def main():
 
     # cgroup experiment
     if 'CLONE_NEWCGROUP' in config['unshare_flags']:
-      os.mkdir(config['cg_memory_sub'])
-      open( '{}/cgroup.procs'.format( config['cg_memory_sub']), 'w' ).write(str( os.getpid() ))
       os.mkdir(config['cg_cpu_sub'])
-      open( '{}/cgroup.procs'.format( config['cg_cpu_sub']), 'w' ).write(str( os.getpid() ))
-      # set max memory usage
-      if config['max_memory']:
-        open( '{}/memory.limit_in_bytes'.format( config['cg_memory_sub']), 'w' ).write(str( human2bytes(config['max_memory']) ))
-        open( '{}/memory.memsw.limit_in_bytes'.format( config['cg_memory_sub']), 'w' ).write(str( human2bytes(config['max_memory']) ))
+      open( '{}/cgroup.procs'.format( config['cg_cpu_sub']), 'w' ).write(str(os.getpid()))
+      os.mkdir(config['cg_devices_sub'])
+      open( '{}/cgroup.procs'.format( config['cg_devices_sub']), 'w' ).write(str(os.getpid()))
+      os.mkdir(config['cg_memory_sub'])
+      open( '{}/cgroup.procs'.format( config['cg_memory_sub']), 'w' ).write(str(os.getpid()))
       # set cpu quota
       if config['cpu_quota']:
         period = int(open( '{}/cpu.cfs_period_us'.format( config['cg_cpu_sub']), 'r' ).read())
         quota = int( period * config['cpu_quota'] )
         open( '{}/cpu.cfs_quota_us'.format( config['cg_cpu_sub']), 'w' ).write(str(quota))
+      # set memory usage limit
+      if config['max_memory']:
+        open( '{}/memory.limit_in_bytes'.format( config['cg_memory_sub']), 'w' ).write(str( human2bytes(config['max_memory']) ))
+        open( '{}/memory.memsw.limit_in_bytes'.format( config['cg_memory_sub']), 'w' ).write(str( human2bytes(config['max_memory']) ))
 
 
     # install signal handler
@@ -527,6 +533,23 @@ def main():
           logging.warning('Umount cleanup for bind dir "{}" failed'.format(bind_dir))
       for bind_dir in config['bind_dirs']:
         os.removedirs( '{}/{}'.format(private_space,bind_dir) )
+
+    # cgroup device restriction
+    if config['restrict_devices']:
+      if 'CLONE_NEWCGROUP' not in config['unshare_flags']:
+        die('Can not restrict devices access without unshared cgroup')
+      open( '{}/devices.deny'.format( config['cg_devices_sub']), 'w' ).write('a')
+      allow_list = [
+          'c 1:3 rw', # /dev/null
+          'c 1:5 rw', # /dev/zero
+          'c 1:7 rw', # /dev/full
+          'c 1:8 rw', # /dev/random
+          'c 1:9 rw', # /dev/urandom
+          'c 5:2 rw', # ptmx
+          'c 136:* rw', # /dev/pts/
+        ]
+      for rule in allow_list:
+        open( '{}/devices.allow'.format( config['cg_devices_sub']), 'w' ).write(rule)
 
     # our su implementation
     def change_user():
