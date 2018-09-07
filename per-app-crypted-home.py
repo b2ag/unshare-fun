@@ -54,7 +54,7 @@ class FLAGS(object):
     return self.ctype(sum([ self.flags[x] for x in set(data) ]))
 class UNSHARE_FLAGS(FLAGS):
   ctype = ctypes.c_int
-  flags = { 'CLONE_NEWNS':0x00020000, 'CLONE_NEWUTS':0x04000000, 'CLONE_NEWIPC':0x08000000, 'CLONE_NEWUSER':0x10000000, 'CLONE_NEWPID':0x20000000, 'CLONE_NEWNET':0x40000000 }
+  flags = { 'CLONE_NEWNS':0x00020000, 'CLONE_NEWCGROUP':0x02000000, 'CLONE_NEWUTS':0x04000000, 'CLONE_NEWIPC':0x08000000, 'CLONE_NEWUSER':0x10000000, 'CLONE_NEWPID':0x20000000, 'CLONE_NEWNET':0x40000000 }
 class MOUNT_FLAGS(FLAGS):
   ctype = ctypes.c_ulong
   flags = { 'MS_RDONLY':1, 'MS_NOSUID':2, 'MS_NODEV':4, 'MS_NOEXEC':8, 'MS_SYNCHRONOUS':16, 'MS_REMOUNT':32, 'MS_MANDLOCK':64, 'MS_DIRSYNC':128, 'MS_NOATIME':1024, 'MS_NODIRATIME':2048, 'MS_BIND':4096, 'MS_MOVE':8192, 'MS_REC':16384, 'MS_SILENT':32768, 'MS_POSIXACL':(1<<16), 'MS_UNBINDABLE':(1<<17), 'MS_PRIVATE':(1<<18), 'MS_SLAVE':(1<<19), 'MS_SHARED':(1<<20), 'MS_RELATIME':(1<<21), 'MS_KERNMOUNT':(1<<22), 'MS_I_VERSION':(1<<23), 'MS_STRICTATIME':(1<<24), 'MS_NOSEC':(1<<28), 'MS_BORN':(1<<29), 'MS_ACTIVE':(1<<30), 'MS_NOUSER':(1<<31) }
@@ -110,7 +110,7 @@ def parse_arguments():
   config['home'] = pwd.getpwuid(config['uid']).pw_dir
   config['app_arguments'] = arguments['<arguments>']
   config['app_basename'] = os.path.basename(arguments['<application>'])
-  config['unshare_flags'] = [ 'CLONE_NEWNS', 'CLONE_NEWPID', 'CLONE_NEWUTS', 'CLONE_NEWIPC', 'CLONE_NEWNET' ]
+  config['unshare_flags'] = [ 'CLONE_NEWNS', 'CLONE_NEWPID', 'CLONE_NEWUTS', 'CLONE_NEWIPC', 'CLONE_NEWNET', 'CLONE_NEWCGROUP' ]
   config['hashtool'] = arguments['--hash']
   config['teardown_timeout'] = int(arguments['--teardown-timeout'])
   config['app_path_hash'] = subprocess.Popen([config['hashtool']],stdout=subprocess.PIPE,stdin=subprocess.PIPE,stderr=subprocess.DEVNULL).communicate(config['app_path'].encode()+b'\n')[0].decode().split(' ')[0] # extra newline for compability with bash script version
@@ -471,6 +471,12 @@ def main():
         if workaround.returncode is not 0:
           die('Mount private /proc failed: {}'.format(os.strerror(ctypes.get_errno())))
 
+    # hide other user homes too
+    if os.path.dirname(config['home']) == '/home':
+      if libc.mount( b'tmpfs', b'/home', b'tmpfs', ['MS_NOSUID','MS_NOEXEC','MS_NODEV'], ctypes.c_char_p(0) ) is not 0:
+        die('Could not hide "/home": {}'.format(os.strerror(ctypes.get_errno())))
+      os.mkdir( config['home'] )
+      
     # mount home
     if libc.mount( 
          config['open_container'].encode(), 
