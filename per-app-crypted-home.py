@@ -61,12 +61,14 @@ class MOUNT_FLAGS(FLAGS):
 libc = ctypes.CDLL( ctypes.util.find_library('c'), use_errno=True )
 # int mount( source, target, filesystemtype, mountflags, data)
 libc.mount.argtypes = [ ctypes.c_char_p, ctypes.c_char_p, ctypes.c_char_p, MOUNT_FLAGS, ctypes.c_char_p ]
-# int setns(int fd, int nstype)
-libc.setns.argtypes = [ ctypes.c_int, ctypes.c_int ]
-# int unshare(int flags)
-libc.unshare.argtypes = [ UNSHARE_FLAGS ]
 # int prctl(int option, unsigned long arg2, unsigned long arg3, unsigned long arg4, unsigned long arg5)
 libc.prctl.argtypes = [ ctypes.c_int, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong ]
+# int setns(int fd, int nstype)
+libc.setns.argtypes = [ ctypes.c_int, ctypes.c_int ]
+# int umount(const char *target)
+libc.umount.argtypes = [ ctypes.c_char_p ]
+# int unshare(int flags)
+libc.unshare.argtypes = [ UNSHARE_FLAGS ]
 
 def bytes2human( value, long_names=False ):
   mapping = {0:'B',10:'KiB',20:'MiB',30:'GiB',40:'TiB',50:'PiB',60:'EiB',70:'ZiB',80:'YiB'}
@@ -126,6 +128,13 @@ def parse_arguments():
   config['do_xhost_add'] = arguments['--xhost-add-localuser']
   config['hide_xgd_runtime_dir'] = not arguments['--skip-xdg-runtime-dir']
   config['mac_address'] = arguments['--mac-address']
+  config['bind_dirs'] = arguments['-b']
+  if arguments['--skip-ipc']:
+    config['unshare_flags'].remove('CLONE_NEWIPC')
+  if arguments['--skip-network']:
+    config['unshare_flags'].remove('CLONE_NEWNET')
+  if arguments['--skip-uts']:
+    config['unshare_flags'].remove('CLONE_NEWUTS')
   if arguments['--resize']:
     config['resize'] = arguments['--resize'].upper()
     if not human2bytes(config['resize']):
@@ -357,6 +366,22 @@ def main():
       if libc.mount( b'none', b'/', ctypes.c_char_p(0), ['MS_REC','MS_PRIVATE'], ctypes.c_char_p(0) ) is not 0:
         die('Changing mount propagation of / to private failed')
 
+    # get some private space
+    private_space='/run/{}'.format(sys.argv[0])
+    os.makedirs(private_space, exist_ok=True, mode=0o700)
+    if libc.mount( b'tmpfs', private_space.encode(), b'tmpfs', [], ctypes.c_char_p(0) ) is not 0:
+      die('Could not create a private space: {}'.format(os.strerror(ctypes.get_errno())))
+
+    # bind dirs feature
+    for bind_dir in config['bind_dirs']:
+      os.mkdir('{}/{}'.format(private_space,bind_dir))
+      if libc.mount( 
+         '{}/{}'.format(config['home'],bind_dir).encode(), 
+         '{}/{}'.format(private_space,bind_dir).encode(), 
+         ctypes.c_char_p(0), 
+         ['MS_BIND'], ctypes.c_char_p(0) ) is not 0:
+        die('Bind mount "{}" failed: {}'.format(bind_dir,os.strerror(ctypes.get_errno())))
+
     # start init
     initproc = subprocess.Popen(['sleep','infinity'])
     # install signal handler
@@ -429,6 +454,22 @@ def main():
         logging.error('Could not change owner of new home: {}'.format(os.strerror(ctypes.get_errno())))
     # change directory to new home
     os.chdir(config['home'])
+
+    # bind dirs second part 
+    for bind_dir in config['bind_dirs']:
+      os.makedirs('{}/{}'.format(config['home'],bind_dir),exist_ok=True)
+      if libc.mount( 
+         '{}/{}'.format(private_space,bind_dir).encode(), 
+         '{}/{}'.format(config['home'],bind_dir).encode(), 
+         ctypes.c_char_p(0), 
+         ['MS_BIND'], ctypes.c_char_p(0) ) is not 0:
+        logging.error('2nd Bind mount "{}" failed: {}'.format(bind_dir,os.strerror(ctypes.get_errno())))
+      if libc.umount( '{}/{}'.format(private_space,bind_dir).encode() ) is not 0:
+        logging.warning('Umount cleanup for bind dir "{}" failed'.format(bind_dir))
+      try:
+        os.rmdir( '{}/{}'.format(private_space,bind_dir) )
+      except:
+        pass
 
     # our su implementation
     def change_user():
