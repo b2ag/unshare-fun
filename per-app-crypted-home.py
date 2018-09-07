@@ -374,7 +374,7 @@ def main():
 
     # get a private space
     if 'CLONE_NEWNS' in config['unshare_flags']:
-      private_space='/run/{}'.format(sys.argv[0])
+      private_space='/run/{}'.format(os.path.basename(sys.argv[0]))
       os.makedirs(private_space, exist_ok=True, mode=0o700)
       if libc.mount( b'tmpfs', private_space.encode(), b'tmpfs', ['MS_NOSUID','MS_NOEXEC','MS_NODEV'], ctypes.c_char_p(0) ) is not 0:
         die('Could not create a private space: {}'.format(os.strerror(ctypes.get_errno())))
