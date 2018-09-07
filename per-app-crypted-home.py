@@ -38,6 +38,7 @@ from docopt import docopt
 import logging
 import math
 import os
+import pathlib
 import pwd
 import random
 import re
@@ -435,8 +436,11 @@ def main():
 
     if config['do_tcpdump'] and 'CLONE_NEWNET' in config['unshare_flags']:
       output_filename='{}.{}.pcap'.format(config['net_name'],datetime.datetime.utcnow().strftime('%Y%m%d%H%M'))
+      pathlib.Path( output_filename ).touch( mode=0o600 )
+      os.chown( output_filename, config['uid'], config['gid'] )
       tcpdump = subprocess.Popen(['tcpdump','-ni',config['net_name'],'-w',output_filename,'tcp[tcpflags] & (tcp-syn|tcp-fin) != 0 or udp or icmp'],stderr=sys.stderr)
-      atexit.register(tcpdump.send_signal,signal.SIGTERM)
+      atexit.register( tcpdump.wait, timeout=config['teardown_timeout']/2 )
+      atexit.register( tcpdump.send_signal, signal.SIGTERM )
 
 
     # pid namespace and /proc
