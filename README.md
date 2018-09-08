@@ -78,4 +78,4 @@ ls -lh chromium*.pcap
 ```
 
 ### Console cast
-[![Console cast](https://asciinema.org/a/T78X7UECA0KtegO5PEXa8w7yQ.png)](https://asciinema.org/a/T78X7UECA0KtegO5PEXa8w7yQ)
+[![Console cast](https://asciinema.org/a/nfUdgpEO8Hcuy0QVRTvrn4QaY.png)](https://asciinema.org/a/nfUdgpEO8Hcuy0QVRTvrn4QaY)
