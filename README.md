@@ -2,7 +2,7 @@
 Experiments with unshare
 
 ## per-app-crypted-home.py
-This script uses an encrypted container as home directory for the application given as argument. It unshares mountpoint, network, IPC and UTS namespaces. The script is designed as pretty advanced proof of concept application sandboxing wrapper. Shadowing of original home, "/run" and "/tmp" directories is intentional. To be able to use unshare/setns, mount, dm-crypt and configure network the script needs sudo to get root access. To use X it preserves "/tmp/.X11-unix" and handles Xauthority. To run X applications you need to pass "--xauth". To allow applications to access internet use "--skip-network" or "--nat" option. If you pass "--skip-network" options "--tcpdump" and "--nat" will not work.
+This script creates an encrypted container as home directory for the application given as argument. It unshares mountpoint, network, IPC and UTS namespaces. The script is designed as pretty advanced proof of concept application sandboxing wrapper. Shadowing of original home, "/run" and "/tmp" directories is intentional. To be able to use unshare/setns, mount, dm-crypt and configure network the script needs sudo to get root access. To use X it preserves "/tmp/.X11-unix" and handles Xauthority. To run X applications you need to pass "--xauth". To allow applications to access internet use "--skip-network" or "--nat" option. If you pass "--skip-network" options "--tcpdump" and "--nat" will not work.
 
 Warning: Option "--nat" will enable IP forwarding on your default network interfaces and WILL NOT remove thoses changes on tear down. Also the script preserves environment variables while switching between your user and root.
 
