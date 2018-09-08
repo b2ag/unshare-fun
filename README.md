@@ -18,6 +18,7 @@ Runs application within an encrypted sandboxed filesystem used as home shadowing
 Options:
   -b DIRECTORY                    Bind mount given subdirectory of home into containers home
   -c, --container=FILE            File used as container for encrypted home [default: $HOME/.crypted-homes/$APPLICATION_ID]
+  --cpu-quota=FLOAT               Quota for CPU time ( 0.5 = 50% of 1 core, 4 = 100% of 4 cores )
   -f, --fs-type=TYPE              Filesystem type inside container [default: ext4]
   -h, --help                      Display this help and exits
   -H, --hash=COMMAND              Hash executable used to build application identifier [default: sha256sum]
@@ -30,13 +31,16 @@ Options:
   -r, --resize=SIZE               Resize an existing container
   -s, --size=SIZE                 Maximum size of container [default: 4G]
   --skip-dbus-launch              Skip DBUS launch inside container
+  --skip-devices                  Skip restricting devices access inside container
+  --skip-hide-run                 Skip mount new tmpfs to /run
+  --skip-hide-tmp                 Skip mount new tmpfs to /tmp
   --skip-ipc                      Skip IPC virtualisation
   --skip-network                  Skip network virtualisation
   --skip-uts                      Skip UTS (hostname) virtualisation
   --skip-xdg-runtime-dir          Skip shadowing of XDG_RUNTIME_DIR
   -v, --verbose                   Verbose logging output 
   --version                       Shows version and exits
-  -x, --xhost-add-localuser       Add current user via xhost to X access control list
+  -x, --xauth-add                 Add xauth cookie
   -t, --tcpdump                   Dump reduced version of network traffic with tcpdump
   --teardown-timeout=SECONDS      Timeout for closing the container in seconds [default: 10]
 ```
