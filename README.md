@@ -77,3 +77,6 @@ ls -lh chromium*.pcap
 ./per-app-crypted-home.py --key-file ~/secret_key "$SHELL" -c "ls -la /tmp /run /home"
 ```
 
+### Console cast
+[![Console cast](https://asciinema.org/a/T78X7UECA0KtegO5PEXa8w7yQ.png)]
+(https://asciinema.org/a/T78X7UECA0KtegO5PEXa8w7yQ)
