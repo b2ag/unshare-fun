@@ -9,10 +9,12 @@ Options:
   -b DIRECTORY                    Bind mount given subdirectory of home into containers home
   -c, --container=FILE            File used as container for encrypted home [default: $HOME/.crypted-homes/$APPLICATION_ID]
   --cpu-quota=FLOAT               Quota for CPU time ( 0.5 = 50% of 1 core, 4 = 100% of 4 cores )
+  -d, --display=DISPLAY           Display to use
   -f, --fs-type=TYPE              Filesystem type inside container [default: ext4]
   -h, --help                      Display this help and exits
   -H, --hash=COMMAND              Hash executable used to build application identifier [default: sha256sum]
   -i, --id=APPLICATION_ID         Application identifier [default: $BASENAME-$PATHHASH]
+  --int-do-mkfs=<0|1>             Used internally when becoming root after creating a new container
   -k, --key-file=FILE             Use key from FILE instead of passphrase for dm-crypt
   -m, --mac-address=MAC           Spoof virtual ethernet MAC address
   --max-memory=SIZE               Set memory limit for container
@@ -28,7 +30,8 @@ Options:
   --skip-network                  Skip network virtualisation
   --skip-uts                      Skip UTS (hostname) virtualisation
   --skip-bind-x11-unix            Skip bind mount of /tmp/.X11-unix
-  --skip-xdg-runtime-dir          Skip shadowing of XDG_RUNTIME_DIR
+  --skip-xdg-runtime-dir          Skip providing XDG_RUNTIME_DIR
+  -u, --user=USER                 User to run as
   -v, --verbose                   Verbose logging output 
   --version                       Shows version and exits
   -x, --xauth                     Xauth cookie handling
@@ -41,7 +44,7 @@ import ctypes
 import ctypes.util
 import datetime
 import distutils.spawn
-from docopt import docopt
+import docopt
 import logging
 import math
 import os
@@ -65,7 +68,9 @@ class UNSHARE_FLAGS(FLAGS):
 class MOUNT_FLAGS(FLAGS):
   ctype = ctypes.c_ulong
   flags = { 'MS_RDONLY':1, 'MS_NOSUID':2, 'MS_NODEV':4, 'MS_NOEXEC':8, 'MS_SYNCHRONOUS':16, 'MS_REMOUNT':32, 'MS_MANDLOCK':64, 'MS_DIRSYNC':128, 'MS_NOATIME':1024, 'MS_NODIRATIME':2048, 'MS_BIND':4096, 'MS_MOVE':8192, 'MS_REC':16384, 'MS_SILENT':32768, 'MS_POSIXACL':(1<<16), 'MS_UNBINDABLE':(1<<17), 'MS_PRIVATE':(1<<18), 'MS_SLAVE':(1<<19), 'MS_SHARED':(1<<20), 'MS_RELATIME':(1<<21), 'MS_KERNMOUNT':(1<<22), 'MS_I_VERSION':(1<<23), 'MS_STRICTATIME':(1<<24), 'MS_NOSEC':(1<<28), 'MS_BORN':(1<<29), 'MS_ACTIVE':(1<<30), 'MS_NOUSER':(1<<31) }
-
+PR_SET_PDEATHSIG=1
+PR_SET_SECCOMP=22
+SECCOMP_MODE_STRICT=1
 libc = ctypes.CDLL( ctypes.util.find_library('c'), use_errno=True )
 # int mount( source, target, filesystemtype, mountflags, data)
 libc.mount.argtypes = [ ctypes.c_char_p, ctypes.c_char_p, ctypes.c_char_p, MOUNT_FLAGS, ctypes.c_char_p ]
@@ -96,8 +101,9 @@ def die( msg ):
   sys.exit(1)
 
 def parse_arguments():
-  arguments = docopt( __doc__.replace('$0',sys.argv[0]), options_first=True, version='{} 0.1'.format(sys.argv[0]))
+  arguments = docopt.docopt( __doc__.replace('$0',os.path.basename(sys.argv[0])), options_first=True, version='{} 0.2'.format(os.path.basename(sys.argv[0])))
   config = {}
+  config['superuser'] = os.getuid() is 0
   config['quiet'] = False
   config['verbose'] = False
   if arguments['--verbose']:
@@ -109,7 +115,7 @@ def parse_arguments():
   config['app_path'] = distutils.spawn.find_executable(arguments['<application>'])
   if not config['app_path']:
     die("Couldn't find application executable for \"{}\"".format(arguments['<application>']))
-  config['uid'] = os.getuid() if os.getuid() is not 0 else int(os.getenv('uid'))
+  config['uid'] = pwd.getpwnam(arguments['--user']).pw_uid if arguments['--user'] else os.getuid()
   config['gid'] = pwd.getpwuid(config['uid']).pw_gid
   config['user'] = pwd.getpwuid(config['uid']).pw_name
   config['home'] = pwd.getpwuid(config['uid']).pw_dir
@@ -126,14 +132,13 @@ def parse_arguments():
   config['mkfs'] = distutils.spawn.find_executable('mkfs.{}'.format(config['fs_type']))
   config['key_file'] = arguments['--key-file']
   config['open_container'] = '/dev/mapper/{}'.format(config['app_id'])
-  config['do_mkfs'] = os.getuid() is 0 and os.getenv('do_mkfs') is '1'
+  config['do_mkfs'] = ( arguments['--int-do-mkfs'] is '1' ) if arguments['--int-do-mkfs'] else False
   config['net_name'] = config['app_id'][:8] + config['app_id'][-7:]
   config['parent'] = True
   config['parent_pid'] = os.getpid()
   config['do_nat'] = arguments['--nat']
   config['configure_xauth'] = arguments['--xauth']
-  config['hide_xgd_runtime_dir'] = not arguments['--skip-xdg-runtime-dir']
-  config['xdg_runtime_dir'] = os.getenv('XDG_RUNTIME_DIR')
+  config['xdg_runtime_dir'] = '/run/user/{uid}'.format(**config) if not arguments['--skip-xdg-runtime-dir'] else False
   config['mac_address'] = arguments['--mac-address']
   config['bind_dirs'] = arguments['-b']
   config['do_tcpdump'] = arguments['--tcpdump']
@@ -168,12 +173,38 @@ def parse_arguments():
   config['hide_tmp'] = not arguments['--skip-hide-tmp']
   config['hide_run'] = not arguments['--skip-hide-run']
   config['do_bind_.X11-unix'] = not arguments['--skip-bind-x11-unix']
+  config['display'] = arguments['--display'] if arguments['--display'] else os.getenv('DISPLAY')
+  new_cmdline = [ sys.argv[0] ]
+  new_cmdline += [ '--user', config['user'] ]
+  new_cmdline += [ '--display', config['display'] ]
+  for argument, value in arguments.items():
+    if not argument.startswith('-'): continue
+    if type(value) is bool:
+      if value is True:
+        new_cmdline.append( argument )
+    elif type(value) in [ int, float, str ]:
+      new_cmdline.append( argument )
+      new_cmdline.append( value )
+    elif type(value) is list:
+      for list_value in value:
+        new_cmdline.append( argument )
+        new_cmdline.append( list_value )
+  new_cmdline.append( config['app_path'] ) 
+  new_cmdline += arguments['<arguments>']
+  config['cmdline'] = new_cmdline
   return config
 
 def escalate_priviledges( config ):
   if os.getuid() is not 0:
     logging.info('Need to escalate priviledges')
-    os.execvp( 'sudo', [ 'sudo', '-E', 'uid={uid}'.format(**config), 'do_mkfs={do_mkfs:d}'.format(**config) ] + sys.argv )
+    cmdline = [ config['cmdline'][0] ]
+    cmdline += [ '--int-do-mkfs', '1' if config['do_mkfs'] else '0' ]
+    cmdline += config['cmdline'][1:]
+    if sys.stdin.isatty() or sys.stdout.isatty() or sys.stderr.isatty():
+      os.execvp( 'sudo', [ 'sudo' ] + cmdline )
+    else:
+      os.execvp( 'pkexec', [ 'pkexec' ] + cmdline )
+      
   die('Should not get here')
 
 def try_close_container( config ):
@@ -275,8 +306,8 @@ def decide_about_resize( config ):
 def main():
   logging.basicConfig(format='[{}|%(levelname)s] %(message)s'.format(sys.argv[0]),level=logging.INFO)
   config=parse_arguments()
+  logging.debug('Configuration:\n{}'.format(config))
   if os.getuid() is not 0:
-    logging.debug('Configuration:\n{}'.format(config))
     if not config['mkfs']: logging.warning('Mkfs tool for "{}" not found. Not able to format new containers'.format(config['fs_type']))
     if not config['fsck']: logging.warning('Fsck tool for "{}" not found. Not able to check container filesystem'.format(config['fs_type']))
     if not os.path.exists( config['container'] ):
@@ -331,9 +362,9 @@ def main():
         logging.info('Xauth adding "{net_name}/unix:0" to host auth file "{xauth_file}"'.format(**config))
         if os.path.exists(config['xauth_file']):
           subprocess.run(['xauth','-f',config['xauth_file'],'add','{net_name}/unix:0'.format(**config),'.',config['xauth_key']])
-    elif 'DISPLAY' in os.environ and os.getenv('DISPLAY').startswith(':'):
+    elif config['display'] and config['display'].startswith(':'):
       # extract existing xauth cookie
-      config['xauth_cookie'] = subproccess.check_output(['xauth','extract','-','{}/unix{}'.format(os.uname().nodename,os.getenv('DISPLAY'))])
+      config['xauth_cookie'] = subproccess.check_output(['xauth','extract','-','{}/unix{}'.format(os.uname().nodename,config['display'])])
 
   # forking because we can
   child_pid = os.fork()
@@ -373,7 +404,6 @@ def main():
     config['parent'] = False
 
     # make sure we get a signal when parent dies
-    PR_SET_PDEATHSIG=1
     libc.prctl( PR_SET_PDEATHSIG, signal.SIGTERM, 0, 0, 0 )
 
     # call unshare function
@@ -435,10 +465,18 @@ def main():
     if config['hide_run']:
       if libc.mount( b'tmpfs', b'/run', b'tmpfs', ['MS_NOSUID','MS_NOEXEC','MS_NODEV'], ctypes.c_char_p(0) ) is not 0:
         die('Could not hide "/run": {}'.format(os.strerror(ctypes.get_errno())))
-      if os.getenv('XDG_RUNTIME_DIR').startswith('/run/'):
-        os.makedirs( os.getenv('XDG_RUNTIME_DIR') )
 
-    # get a private space
+    # create XDG_RUNTIME_DIR if not exists
+    if config['xdg_runtime_dir']:
+      if not os.path.exists( config['xdg_runtime_dir'] ):
+        if not config['hide_run']:
+          die('Refusing to create XDG_RUNTIME_DIR without hiding "/run"')
+        os.makedirs( config['xdg_runtime_dir'] )
+        os.chown( config['xdg_runtime_dir'], config['uid'], config['gid'] )
+        os.chmod( config['xdg_runtime_dir'], 0o700 )
+      os.environ['XDG_RUNTIME_DIR'] = config['xdg_runtime_dir']
+
+    # get a private space for this script
     if 'CLONE_NEWNS' in config['unshare_flags']:
       private_space='/run/{}'.format(os.path.basename(sys.argv[0]))
       os.makedirs(private_space, exist_ok=True, mode=0o700)
@@ -541,13 +579,9 @@ def main():
     # change directory to new home
     os.chdir(config['home'])
 
-    # hide /run/user/<uid>
-    if config['hide_xgd_runtime_dir']:
-      if libc.mount( b'tmpfs', os.getenv('XDG_RUNTIME_DIR').encode(), b'tmpfs', ['MS_NOSUID','MS_NOEXEC','MS_NODEV'], ctypes.c_char_p(0) ) is not 0:
-        die('Could not mount a private XDG_RUNTIME_DIR: {}'.format(os.strerror(ctypes.get_errno())))
-      os.chown(os.getenv('XDG_RUNTIME_DIR'),config['uid'],config['gid'])
-      os.chmod(os.getenv('XDG_RUNTIME_DIR'),0o700)
-    
+    # export HOME
+    os.environ['HOME'] = config['home']
+
     # bind dirs second part 
     if 'CLONE_NEWNS' in config['unshare_flags']:
       for bind_dir in config['bind_dirs']:
@@ -619,9 +653,18 @@ def main():
 
     # launch dbus
     if config['do_launch_dbus']:
+      if not config['xdg_runtime_dir']:
+        die("Can not launch dbus without faking XDG_RUNTIME_DIR")
       dbus = subprocess.Popen(['dbus-daemon','--session','--address=unix:path={xdg_runtime_dir}/bus-{net_name}'.format(**config),'--nosyslog','--print-address'],stdout=subprocess.PIPE,preexec_fn=change_user)
       dbus_address = dbus.stdout.readline().strip()
       os.environ['DBUS_SESSION_BUS_ADDRESS'] = dbus_address.decode()
+
+    # export DISPLAY
+    os.environ['DISPLAY'] = config['display']
+
+    def application_preexec():
+      libc.prctl( PR_SET_SECCOMP, SECCOMP_MODE_STRICT, 0, 0, 0 )
+      change_user()
 
     # finally launch our application ...
     application = subprocess.Popen([config['app_path']]+config['app_arguments'],preexec_fn=change_user )
