@@ -71,6 +71,9 @@ ls -lh chromium*.pcap
 ./per-app-crypted-home.py --key-file ~/secret_key -b Downloads "$SHELL" -c "ls -la Downloads"
 # spoof network MAC address
 ./per-app-crypted-home.py --key-file ~/secret_key --mac-address c0:01:da:1a:d0:0d "$SHELL" -c "ip link |grep link/ether"
+# memory limit
+./per-app-crypted-home.py --key-file ~/secret_key --max-memory 16M -- python -c 'buf="A"*32*1024*1024'
+dmesg |tail
 # CPU quota options
 ./per-app-crypted-home.py --key-file ~/secret_key --cpu-quota 0.1 "$SHELL" -c 'for i in $( seq 1 $( grep "^processor" /proc/cpuinfo |wc -l ) ); do while true; do true; done & done; top'
 # hiding host /tmp, /run and /home
