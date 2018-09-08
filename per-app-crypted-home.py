@@ -27,10 +27,11 @@ Options:
   --skip-ipc                      Skip IPC virtualisation
   --skip-network                  Skip network virtualisation
   --skip-uts                      Skip UTS (hostname) virtualisation
+  --skip-bind-x11-unix            Skip bind mount of /tmp/.X11-unix
   --skip-xdg-runtime-dir          Skip shadowing of XDG_RUNTIME_DIR
   -v, --verbose                   Verbose logging output 
   --version                       Shows version and exits
-  -x, --xauth-add                 Add xauth cookie
+  -x, --xauth                     Xauth cookie handling
   -t, --tcpdump                   Dump reduced version of network traffic with tcpdump
   --teardown-timeout=SECONDS      Timeout for closing the container in seconds [default: 10]
 """
@@ -130,7 +131,7 @@ def parse_arguments():
   config['parent'] = True
   config['parent_pid'] = os.getpid()
   config['do_nat'] = arguments['--nat']
-  config['configure_xauth'] = arguments['--xauth-add']
+  config['configure_xauth'] = arguments['--xauth']
   config['hide_xgd_runtime_dir'] = not arguments['--skip-xdg-runtime-dir']
   config['xdg_runtime_dir'] = os.getenv('XDG_RUNTIME_DIR')
   config['mac_address'] = arguments['--mac-address']
@@ -166,6 +167,7 @@ def parse_arguments():
   config['xauth_key'] = binascii.hexlify(os.urandom(16))
   config['hide_tmp'] = not arguments['--skip-hide-tmp']
   config['hide_run'] = not arguments['--skip-hide-run']
+  config['do_bind_.X11-unix'] = not arguments['--skip-bind-x11-unix']
   return config
 
 def escalate_priviledges( config ):
@@ -224,7 +226,7 @@ def luks_open_container( config ):
     die("LUKS open failed")
 
 def mkfs_open_container( config ):
-  logging.info( "Creating filesystem on opened container" )
+  logging.info( "Creating filesystem" )
   logging.warning( "Warning: Random data caused by reading freshly created crypted container may irritate mkfs" )
   if config['quiet']: outfd=subprocess.DEVNULL
   else: outfd=sys.stdout
@@ -235,7 +237,7 @@ def mkfs_open_container( config ):
     die("Mkfs failed")
 
 def fsck_open_container( config, force=False ):
-  logging.info( "Checking filesystem on opened container" )
+  logging.info( "Checking filesystem" )
   if config['verbose']: outfd=sys.stdout
   else: outfd=subprocess.DEVNULL
   cmd=[ config['fsck'], '-y' ]
@@ -304,7 +306,7 @@ def main():
       current_size=os.stat(config['container']).st_size
       header_offset=current_size - int(subprocess.check_output(['blockdev','--getsize64',config['open_container']]))
       new_size='{}s'.format(int((human2bytes(config['resize'])-header_offset)/512))
-      logging.info("Resizing filesystem on opened container")
+      logging.info("Resizing filesystem")
       resize2fs = subprocess.run(['resize2fs',config['open_container'],new_size])
       if resize2fs.returncode is not 0:
         die("Resizing filesystem failed")
@@ -319,14 +321,19 @@ def main():
 
   # xauth setup
   if config['configure_xauth']:
-    auth_file = False
-    pgrep = subprocess.check_output(['pgrep','-a','X'])
-    match = re.search(b'.* -auth (/[^ ]+)',pgrep)
-    if match:
-      config['xauth_file'] = match.group(1).decode()
-      logging.info('Xauth adding "{net_name}/unix:0" to "{xauth_file}"'.format(**config))
-      if os.path.exists(config['xauth_file']):
-        subprocess.run(['xauth','-f',config['xauth_file'],'add','{net_name}/unix:0'.format(**config),'.',config['xauth_key']])
+    if 'CLONE_NEWUTS' in config['unshare_flags']:
+      auth_file = False
+      # find Xorg process to add a new key to it's auth file
+      pgrep = subprocess.check_output(['pgrep','-a','X'])
+      match = re.search(b'.* -auth (/[^ ]+)',pgrep)
+      if match:
+        config['xauth_file'] = match.group(1).decode()
+        logging.info('Xauth adding "{net_name}/unix:0" to host auth file "{xauth_file}"'.format(**config))
+        if os.path.exists(config['xauth_file']):
+          subprocess.run(['xauth','-f',config['xauth_file'],'add','{net_name}/unix:0'.format(**config),'.',config['xauth_key']])
+    elif 'DISPLAY' in os.environ and os.getenv('DISPLAY').startswith(':'):
+      # extract existing xauth cookie
+      config['xauth_cookie'] = subproccess.check_output(['xauth','extract','-','{}/unix{}'.format(os.uname().nodename,os.getenv('DISPLAY'))])
 
   # forking because we can
   child_pid = os.fork()
@@ -498,7 +505,7 @@ def main():
       output_filename='{}.{}.pcap'.format(config['net_name'],datetime.datetime.utcnow().strftime('%Y%m%d%H%M'))
       pathlib.Path( output_filename ).touch( mode=0o600 )
       os.chown( output_filename, config['uid'], config['gid'] )
-      tcpdump = subprocess.Popen(['tcpdump','-ni',config['net_name'],'-w',output_filename,'tcp[tcpflags] & (tcp-syn|tcp-fin) != 0 or udp or icmp'],stderr=sys.stderr)
+      tcpdump = subprocess.Popen(['tcpdump','-ni',config['net_name'],'-w',output_filename,'tcp[tcpflags] & (tcp-syn|tcp-fin) != 0 or not tcp'],stderr=sys.stderr)
       atexit.register( tcpdump.wait, timeout=config['teardown_timeout']/2 )
       atexit.register( tcpdump.send_signal, signal.SIGTERM )
 
@@ -575,15 +582,16 @@ def main():
 
     # hide tmp and bind .X11-unix
     if config['hide_tmp'] and ( 'CLONE_NEWNS' in config['unshare_flags'] ):
-      private_x11_unix = '{}/.X11-unix'.format(private_space)
-      if os.path.exists('/tmp/.X11-unix'):
-        os.mkdir(private_x11_unix.encode())
-        if libc.mount( b'/tmp/.X11-unix', private_x11_unix.encode(), ctypes.c_char_p(0), ['MS_BIND'], ctypes.c_char_p(0) ) is not 0:
-          die('Could not bind "/tmp/.X11-unix" to private space: {}'.format(os.strerror(ctypes.get_errno())))
+      if config['do_bind_.X11-unix']:
+        private_x11_unix = '{}/.X11-unix'.format(private_space)
+        if os.path.exists('/tmp/.X11-unix'):
+          os.mkdir(private_x11_unix.encode())
+          if libc.mount( b'/tmp/.X11-unix', private_x11_unix.encode(), ctypes.c_char_p(0), ['MS_BIND'], ctypes.c_char_p(0) ) is not 0:
+            die('Could not bind "/tmp/.X11-unix" to private space: {}'.format(os.strerror(ctypes.get_errno())))
       # hide /tmp
       if libc.mount( b'tmpfs', b'/tmp', b'tmpfs', ['MS_NOSUID','MS_NOEXEC','MS_NODEV'], ctypes.c_char_p(0) ) is not 0:
         die('Could not hide "/tmp": {}'.format(os.strerror(ctypes.get_errno())))
-      if os.path.exists(private_x11_unix):
+      if config['do_bind_.X11-unix'] and os.path.exists(private_x11_unix):
         os.mkdir('/tmp/.X11-unix')
         if libc.mount( private_x11_unix.encode(), b'/tmp/.X11-unix', ctypes.c_char_p(0), ['MS_BIND'], ctypes.c_char_p(0) ) is not 0:
           die('Could not bind private space to "/tmp/.X11-unix": {}'.format(os.strerror(ctypes.get_errno())))
@@ -591,15 +599,18 @@ def main():
           logging.warning('Could not unmount private space for .X11-unix')
         else:
           os.rmdir( private_x11_unix )
-      
 
+    # handle xauth
     if config['configure_xauth']:
-      new_xauth_file = '{home}/.Xauthority2'.format(**config)
+      new_xauth_file = '{home}/.Xauthority-{net_name}'.format(**config)
       os.environ['XAUTHORITY'] = new_xauth_file
       open( new_xauth_file, 'wb' ).truncate( 0 )
-      subprocess.run(['xauth','-f',new_xauth_file,'add','{net_name}/unix:0'.format(**config),'.',config['xauth_key']])
+      if 'CLONE_NEWUTS' in config['unshare_flags']:
+        subprocess.run(['xauth','-f',new_xauth_file,'add','{net_name}/unix:0'.format(**config),'.',config['xauth_key']])
+      elif 'xauth_cookie' in config:
+        subprocess.Popen(['xauth','-f',new_xauth_file,'add','merge','-']).communicate(config['xauth_cookie'])
+      atexit.register( os.unlink, new_xauth_file )
       os.chown( new_xauth_file, config['uid'], config['gid'] )
-      atexit.register( subprocess.run, ['xauth','remove','{net_name}/unix:0'.format(**config)] )
 
     # our su implementation
     def change_user():
