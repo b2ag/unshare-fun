@@ -22,6 +22,8 @@ Options:
   -s, --size=SIZE                 Maximum size of container [default: 4G]
   --skip-dbus-launch              Skip DBUS launch inside container
   --skip-devices                  Skip restricting devices access inside container
+  --skip-hide-run                 Skip mount new tmpfs to /run
+  --skip-hide-tmp                 Skip mount new tmpfs to /tmp
   --skip-ipc                      Skip IPC virtualisation
   --skip-network                  Skip network virtualisation
   --skip-uts                      Skip UTS (hostname) virtualisation
@@ -162,7 +164,8 @@ def parse_arguments():
   if not human2bytes(config['size']):
     die("Can't parse size argument \"{}\"".format(config['size']))
   config['xauth_key'] = binascii.hexlify(os.urandom(16))
-  config['do_xauth'] = True
+  config['hide_tmp'] = not arguments['--skip-hide-tmp']
+  config['hide_run'] = not arguments['--skip-hide-run']
   return config
 
 def escalate_priviledges( config ):
@@ -314,10 +317,8 @@ def main():
   config['realsize']=bytes2human( os.stat(config['container']).st_blocks*512, long_names=True )
   logging.info("Container currently uses {realsize}".format(**config))
 
-  # xhost add
+  # xauth setup
   if config['configure_xauth']:
-    #logging.warning('Running xhost si:localuser:{user}'.format(**config))
-    #subprocess.run(['xhost','si:localuser:{user}'.format(**config)])
     auth_file = False
     pgrep = subprocess.check_output(['pgrep','-a','X'])
     match = re.search(b'.* -auth (/[^ ]+)',pgrep)
@@ -326,8 +327,6 @@ def main():
       logging.info('Xauth adding "{net_name}/unix:0" to "{xauth_file}"'.format(**config))
       if os.path.exists(config['xauth_file']):
         subprocess.run(['xauth','-f',config['xauth_file'],'add','{net_name}/unix:0'.format(**config),'.',config['xauth_key']])
-
-  logging.info("Setting up virtual environment for opened container")
 
   # forking because we can
   child_pid = os.fork()
@@ -424,6 +423,13 @@ def main():
           pass
       initproc.kill()
     atexit.register( init_exit_handler )
+
+    # hide /run
+    if config['hide_run']:
+      if libc.mount( b'tmpfs', b'/run', b'tmpfs', ['MS_NOSUID','MS_NOEXEC','MS_NODEV'], ctypes.c_char_p(0) ) is not 0:
+        die('Could not hide "/run": {}'.format(os.strerror(ctypes.get_errno())))
+      if os.getenv('XDG_RUNTIME_DIR').startswith('/run/'):
+        os.makedirs( os.getenv('XDG_RUNTIME_DIR') )
 
     # get a private space
     if 'CLONE_NEWNS' in config['unshare_flags']:
@@ -568,12 +574,13 @@ def main():
         open( '{}/devices.allow'.format( config['cg_devices_sub']), 'w' ).write(rule)
 
     # hide tmp and bind .X11-unix
-    if 'CLONE_NEWNS' in config['unshare_flags']:
+    if config['hide_tmp'] and ( 'CLONE_NEWNS' in config['unshare_flags'] ):
       private_x11_unix = '{}/.X11-unix'.format(private_space)
       if os.path.exists('/tmp/.X11-unix'):
         os.mkdir(private_x11_unix.encode())
         if libc.mount( b'/tmp/.X11-unix', private_x11_unix.encode(), ctypes.c_char_p(0), ['MS_BIND'], ctypes.c_char_p(0) ) is not 0:
           die('Could not bind "/tmp/.X11-unix" to private space: {}'.format(os.strerror(ctypes.get_errno())))
+      # hide /tmp
       if libc.mount( b'tmpfs', b'/tmp', b'tmpfs', ['MS_NOSUID','MS_NOEXEC','MS_NODEV'], ctypes.c_char_p(0) ) is not 0:
         die('Could not hide "/tmp": {}'.format(os.strerror(ctypes.get_errno())))
       if os.path.exists(private_x11_unix):
