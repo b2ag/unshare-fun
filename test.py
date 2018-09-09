@@ -10,47 +10,128 @@ blacklist = [
   'fchownat', # change owner and group of a file relative to directory file descriptor
 # exotic syscals
   '_llseek', # reposition read/write file offset for lage files on 32-bit platforms
+  'set_tid_address', # set pointer to thread ID
 # deprecated syscalls
   'fork', # create a child process (replaced by clone with SIGCHLD)
   'oldwait4', # wait for process to change state, BSD style
   'epoll_ctl_old', # control interface for an epoll file descriptor
   'oldstat', 'oldfstat', 'oldlstat', # get file status
-  'oldwait4', # wait for process to change state, BSD style
-  'olduname', 'oldolduname', # get name and information about current kernel
+  'olduname', 'oldolduname', # get name and information about current kerne
+  'brk', # change data segment size
+  'ipc', # System V IPC system calls
+  'socketcall', # socket system calls
 ]
 whitelist = [
-# files
+##############
+# filesystem #
+##############
+  'open', 'openat', 'creat', # open and possibly create a file
+  'open_by_handle_at', # obtain handle for a pathname and open file via a handle
+  'close', # close a file descriptor
+  'access', 'faccessat', # determine accessibility of a file relative to directory file descriptor
+  'statx', # get file status (extended)
+  #'oldstat', 'oldfstat', 'oldlstat', # get file status
+  'stat', 'stat64', 'fstat', 'fstat64', 'fstatat64', 'newfstatat', 'lstat', 'lstat64', # get file status
+  'statfs', 'statfs64', 'fstatfs', 'fstatfs64', # get filesystem statistics
+  'ustat', # get filesystem statistics
+  'flock', # apply or remove an advisory lock on an open file
+  #'fchown', # change owner and group of a file
+  #'fchownat', # change owner and group of a file relative to directory file descriptor
+  'fcntl', # file control
+  'fsync', # synchronize changes to a file
+  'readlink', 'readlinkat', # read value of a symbolic link
+  'rename', 'renameat', 'renameat2', # change the name or location of a file
+  'unlink', 'unlinkat', # delete a name and possibly the file it refers to
+  'symlink', 'symlinkat', # make a symbolic link relative to directory file descriptor
+  'dup', 'dup2', # duplicate an open file descriptor
+#################
+# file contents #
+#################
   'read', # read from a file descriptor
   'write', # write to a file descriptor
   'pread64', # read from to a file descriptor at a given offset
   'pwrite64', # write to a file descriptor at a given offset
-  'readv', 'preadv', 'preadv2' # read data from multiple buffers
-  'writev', 'pwritev', 'pwritev2' # write data into multiple buffers
+  'readv', 'preadv', 'preadv2', # read data from multiple buffers
+  'writev', 'pwritev', 'pwritev2', # write data into multiple buffers
   'lseek', #  move the read/write file offset
-# directories
+  #'_llseek', # reposition read/write file offset for lage files on 32-bit platforms
+  'fallocate', # preallocate or deallocate space to a file
+  'fadvise64', 'fadvise64_64', # predeclare an access pattern for file data
+  'readahead', # initiate file readahead into page cache
+  'ftruncate', 'ftruncate64', # truncate a file to a specified length
+###########
+# devices #
+###########
+  'ioctl', # control device
+  'ioperm', # set port input/output permissions
+  'iopl', # change I/O privilege level
+  'ioprio_set', 'ioprio_get', # set/get I/O scheduling class and priority
+  'io_cancel', # cancel an outstanding asynchronous I/O operation 
+  'io_destroy', # destroy an asynchronous I/O context
+  'io_getevents', # read asynchronous I/O events from the completion queue
+  'io_setup', # create an asynchronous I/O context
+  'io_submit', # submit asynchronous I/O blocks for processing
+###############
+# directories #
+###############
   'getdents', 'getdents64', # get directory entries
-# filesystem
-  'access', 'faccessat', # determine accessibility of a file relative to directory file descriptor
-  'statx', # get file status (extended)
-  'stat', 'stat64', 'fstat', 'fstat64', 'fstatat64', 'newfstatat', # get file status
-  'statfs' 'statfs64', 'fstatfs', 'fstatfs64', # get filesystem statistics
-  'flock', # apply or remove an advisory lock on an open file
-  'fcntl', # file control
-  'fsync', # synchronize changes to a file
-# sockets
+  'mkdir', 'mkdirat', # create a directory
+  'rmdir', # delete a directory
+###########
+# sockets #
+###########
+  'socket', # create an endpoint for communication
+  'socketpair', # create a pair of connected sockets
+  'connect', # set and get signal alternate stack context
   'accept', 'accept4', # accept a connection on a socket
+  'sendto', # send a message on a socket
+  'sendmsg', # send a message on a socket using a message structure
   'recvmsg', # receive a message from a socket
-# processes
+  #'socketcall', # socket system calls
+#############
+# processes #
+#############
+  'getpid', # get process identification
+  'gettid', # get thread identification
+  #'set_tid_address', # set pointer to thread ID
+  'prctl', # operations on a process
+  'arch_prctl', # set architecture-specific thread state
+  #'fork', # create a child process (replaced by clone with SIGCHLD)
   'clone', # create a child process
-# waiting/synchronisation
+  'execve', # execute a program
+  'execveat', # execute program relative to a directory file descriptor
+  'kill', # send signal to a process
+  'exit', # terminate the calling process
+  'exit_group', # exit all threads in a process
+  'pipe', 'pipe2', # create an interprocess channel
+###################
+# synchronisation #
+###################
+  'select', 'pselect6', '_newselect', # wait until one or more file descriptors become "ready"
   'futex', # fast user-space locking
-  'sched_yield', # yield the processor
-  'poll', # input/output multiplexing
+  'set_robust_list', 'get_robust_list', # set/get list of robust futexes
+  'poll', 'ppoll', # wait for some event on a file descriptor
+  #'oldwait4', # wait for process to change state, BSD style
+  'wait4', # wait for process to change state, BSD style
   'epoll_create', 'epoll_create1', # open an epoll file descriptor
+  #'epoll_ctl_old', # control interface for an epoll file descriptor
   'epoll_ctl', # control interface for an epoll file descriptor
   'epoll_wait', 'epoll_pwait', # wait for an I/O event on an epoll file descriptor
-  'wait4', # wait for process to change state, BSD style
-# signals
+  'eventfd', 'eventfd2', # create a file descriptor for event notification
+##############
+# scheduling #
+##############
+  'sched_yield', # yield the processor
+  'sched_setaffinity', 'sched_getaffinity', # set and get a thread's CPU affinity mask
+  'sched_get_priority_max', 'sched_get_priority_min', # get priority limits (REALTIME)
+  'sched_setattr', 'sched_getattr', # set and get scheduling policy and attributes
+  'sched_setparam', 'sched_getparam', # set and get scheduling parameters (REALTIME)
+  'sched_setscheduler', 'sched_getscheduler', # get scheduling policy (REALTIME)
+  'sched_rr_get_interval', # get execution time limits (REALTIME)
+  'setpriority', 'getpriority', # get and set the nice value
+###########
+# signals #
+###########
   'sigaction', 'rt_sigaction', # examine and change a signal action
   'sigprocmask', 'rt_sigprocmask', # examine and change blocked signals
   'sigreturn', 'rt_sigreturn', # return from signal handler and cleanup stack frame
@@ -58,37 +139,64 @@ whitelist = [
   'sigsuspend', 'rt_sigsuspend', # wait for a signal
   'rt_sigqueueinfo', 'rt_tgsigqueueinfo', # queue a signal and data
   'rt_sigtimedwait', # synchronously wait for queued signals
-# memory
+  'sigaltstack', # set and get signal alternate stack context
+  'alarm', # set an alarm clock for delivery of a signal
+##########
+# memory #
+##########
+  #'brk', # change data segment size
+  'madvise', # give advice about use of memory
+  'mmap', 'mmap2', 'munmap', # map files or devices into memory
   'mprotect', # set protection of memory mapping
-# others
+  'set_mempolicy', # set default NUMA memory policy for a thread and its children
+  'get_mempolicy', # retrieve NUMA memory policy for a thread
+  'set_thread_area', 'get_thread_area', # set a GDT entry for thread-local storage
+  'shmctl', # XSI shared memory control operations
+########
+# user #
+########
+  'getuid', 'geteuid', # get a real and effective user ID 
+##########
+# others #
+##########
+  #'_sysctl', # read/write system parameters
+  #'olduname', 'oldolduname', # get name and information about current kerne
   'uname', # get name and information about current kernel
+  'getrandom', # obtain a series of random bytes
+  'ipc', # System V IPC system calls
+  'seccomp', # operate on Secure Computing state of the process
+  'getrusage', # get information about resource utilization
 ]
 specials = {
-  # needed by strace -qcf ?
-  'restart_syscall': defaction=libseccomp.seccomp.LOG,
+   # needed by strace -qcf ?
+  'restart_syscall': libseccomp.seccomp.LOG,
 }
 
 f = libseccomp.seccomp.SyscallFilter(defaction=libseccomp.seccomp.LOG)
 for syscall in blacklist:
-  f.add_rule( libseccomp.seccomp.ERRNO(126), syscall )
+  try:
+    f.add_rule( libseccomp.seccomp.ERRNO(126), syscall )
+  except RuntimeError as e:
+    print('syscall = {}'.format(syscall))
+    print(e)
 for syscall in whitelist:
-  f.add_rule( libseccomp.seccomp.ALLOW, syscall )
+  try:
+    f.add_rule( libseccomp.seccomp.ALLOW, syscall )
+  except RuntimeError as e:
+    print('syscall = {}'.format(syscall))
+    print(e)
 for syscall, action in specials.items():
-  f.add_rule( action, syscall )
+  try:
+    f.add_rule( action, syscall )
+  except RuntimeError as e:
+    print('syscall = {}'.format(syscall))
+    print(e)
 
-#whitelist = ['open','close','read','write','rt_sigreturn','exit']
-# add syscall filter rules to allow certain syscalls
-#f.add_rule(libseccomp.seccomp.ALLOW, "open")
-#f.add_rule(libseccomp.seccomp.ALLOW, "close")
-#f.add_rule(libseccomp.seccomp.ALLOW, "read", libseccomp.seccomp.Arg(0, libseccomp.seccomp.EQ, sys.stdin.fileno()))
-#f.add_rule(libseccomp.seccomp.ALLOW, "write", libseccomp.seccomp.Arg(0, libseccomp.seccomp.EQ, sys.stdout.fileno()))
-#f.add_rule(libseccomp.seccomp.ALLOW, "write", libseccomp.seccomp.Arg(0, libseccomp.seccomp.EQ, sys.stderr.fileno()))
-#f.add_rule(libseccomp.seccomp.ALLOW, "rt_sigreturn")
-#f.add_rule(libseccomp.seccomp.ALLOW, "exit_group")
-#f.add_rule(libseccomp.seccomp.ALLOW, "exit")
-#f.add_rule(libseccomp.seccomp.ALLOW, "fork")
-#f.add_rule(libseccomp.seccomp.ALLOW, "shmctl")
 # load the filter into the kernel
 f.load()
-#print("hallo")
+
+# start shell
+print('Blacklisted: {}  Whitelisted: {}'.format(len(blacklist),len(whitelist)))
+print("ENTER")
 os.system('zsh')
+print("EXIT")
