@@ -127,9 +127,8 @@ def parse_arguments():
   # read config
   if arguments['--config']:
     config_parser = configparser.ConfigParser()
-    config_file_name = '{}.cfg'.format(arguments['--config'])
-    if os.path.exists(config_file_name):
-      config_parser.read_file(open(config_file_name))
+    if os.path.exists(arguments['--config']):
+      config_parser.read_file(open(arguments['--config']))
       config_file_contents = config_parser.items(configparser.DEFAULTSECT)
       for key, value in config_file_contents:
         if value: config[key] = json.loads(value)
@@ -176,9 +175,9 @@ def parse_arguments():
     if arguments['--write-config']:
       for key, value in config.items():
         config_parser.set( configparser.DEFAULTSECT, key, json.dumps(value) )
-      with open(config_file_name, 'w') as configfile:
+      with open(arguments['--config'], 'w') as configfile:
         config_parser.write(configfile)
-      logging.info('Successfully writen config "{}"'.format(config_file_name))
+      logging.info('Successfully writen config "{}"'.format(arguments['--config']))
       sys.exit(0)
   # config override
   config['resize'] = arguments['--resize']
