@@ -7,13 +7,14 @@ Runs application within an encrypted sandboxed filesystem used as home shadowing
 
 Options:
   -b DIRECTORY                    Bind mount given subdirectory of home into containers home
-  -c, --container=FILE            File used as container for encrypted home [default: $HOME/.crypted-homes/$APPLICATION_ID]
+  --container=FILE                File used as container for encrypted home (default: $HOME/.crypted-homes/$APPLICATION_ID)
+  -c, --config=NAME               Use a config file
   --cpu-quota=FLOAT               Quota for CPU time ( 0.5 = 50% of 1 core, 4 = 100% of 4 cores )
   -d, --display=DISPLAY           Display to use
-  -f, --fs-type=TYPE              Filesystem type inside container [default: ext4]
+  -f, --fs-type=TYPE              Filesystem type inside container (default: ext4)
   -h, --help                      Display this help and exits
-  -H, --hash=COMMAND              Hash executable used to build application identifier [default: sha256sum]
-  -i, --id=APPLICATION_ID         Application identifier [default: $BASENAME-$PATHHASH]
+  -H, --hash=COMMAND              Hash executable used to build application identifier (default: sha256sum)
+  -i, --id=APPLICATION_ID         Application identifier (default: $BASENAME-$PATHHASH)
   --int-do-mkfs=<0|1>             Used internally when becoming root after creating a new container
   -k, --key-file=FILE             Use key from FILE instead of passphrase for dm-crypt
   -m, --mac-address=MAC           Spoof virtual ethernet MAC address
@@ -21,7 +22,7 @@ Options:
   -n, --nat                       Setup NAT for internet access
   -q, --quiet                     Suppress extra output
   -r, --resize=SIZE               Resize an existing container
-  -s, --size=SIZE                 Maximum size of container [default: 4G]
+  -s, --size=SIZE                 Maximum size of container (default: 4G)
   --seccomp                       Sandbox syscalls with seccomp
   --skip-dbus-launch              Skip DBUS launch inside container
   --skip-devices                  Skip restricting devices access inside container
@@ -35,17 +36,21 @@ Options:
   -u, --user=USER                 User to run as
   -v, --verbose                   Verbose logging output 
   --version                       Shows version and exits
+  -w, --write-config              Write current settings to config
   -x, --xauth                     Xauth cookie handling
   -t, --tcpdump                   Dump reduced version of network traffic with tcpdump
-  --teardown-timeout=SECONDS      Timeout for closing the container in seconds [default: 10]
+  --teardown-timeout=SECONDS      Timeout for closing the container in seconds (default: 10)
 """
 import atexit
 import binascii
+import configparser
 import ctypes
 import ctypes.util
 import datetime
 import distutils.spawn
 import docopt
+import hashlib
+import json
 import logging
 import math
 import os
@@ -106,83 +111,108 @@ def die( msg ):
 def parse_arguments():
   arguments = docopt.docopt( __doc__.replace('$0',os.path.basename(sys.argv[0])), options_first=True, version='{} 0.2'.format(os.path.basename(sys.argv[0])))
   config = {}
-  config['superuser'] = os.getuid() is 0
   config['quiet'] = False
-  config['verbose'] = False
-  if arguments['--verbose']:
-    logging.getLogger().setLevel( logging.DEBUG )
-    config['verbose'] = True
-  elif arguments['--quiet']:
+  if arguments['--quiet']:
     logging.getLogger().setLevel( logging.ERROR )
     config['quiet'] = True
-  config['app_path'] = distutils.spawn.find_executable(arguments['<application>'])
-  if not config['app_path']:
-    die("Couldn't find application executable for \"{}\"".format(arguments['<application>']))
-  config['uid'] = pwd.getpwnam(arguments['--user']).pw_uid if arguments['--user'] else os.getuid()
-  config['gid'] = pwd.getpwuid(config['uid']).pw_gid
-  config['user'] = pwd.getpwuid(config['uid']).pw_name
-  config['home'] = pwd.getpwuid(config['uid']).pw_dir
-  config['app_arguments'] = arguments['<arguments>']
-  config['app_basename'] = os.path.basename(arguments['<application>'])
+  # defaults
   config['unshare_flags'] = [ 'CLONE_NEWNS', 'CLONE_NEWPID', 'CLONE_NEWUTS', 'CLONE_NEWIPC', 'CLONE_NEWNET', 'CLONE_NEWCGROUP' ]
-  config['hashtool'] = arguments['--hash']
-  config['teardown_timeout'] = int(arguments['--teardown-timeout'])
-  config['app_path_hash'] = subprocess.Popen([config['hashtool']],stdout=subprocess.PIPE,stdin=subprocess.PIPE,stderr=subprocess.DEVNULL).communicate(config['app_path'].encode()+b'\n')[0].decode().split(' ')[0] # extra newline for compability with bash script version
-  config['app_id'] = arguments['--id'].replace('$BASENAME',config['app_basename']).replace('$PATHHASH',config['app_path_hash'])
-  config['container'] = arguments['--container'].replace('$HOME',config['home']).replace('$APPLICATION_ID', config['app_id'])
-  config['fs_type'] = arguments['--fs-type'].lower()
-  config['fsck'] = distutils.spawn.find_executable('fsck.{}'.format(config['fs_type']))
-  config['mkfs'] = distutils.spawn.find_executable('mkfs.{}'.format(config['fs_type']))
-  config['key_file'] = arguments['--key-file']
-  config['open_container'] = '/dev/mapper/{}'.format(config['app_id'])
-  config['do_mkfs'] = ( arguments['--int-do-mkfs'] is '1' ) if arguments['--int-do-mkfs'] else False
-  config['net_name'] = config['app_id'][:8] + config['app_id'][-7:]
-  config['parent'] = True
-  config['parent_pid'] = os.getpid()
-  config['do_nat'] = arguments['--nat']
-  config['configure_xauth'] = arguments['--xauth']
-  config['xdg_runtime_dir'] = '/run/user/{uid}'.format(**config) if not arguments['--skip-xdg-runtime-dir'] else False
-  config['mac_address'] = arguments['--mac-address']
-  config['bind_dirs'] = arguments['-b']
-  config['do_tcpdump'] = arguments['--tcpdump']
-  config['use_seccomp'] = arguments['--seccomp']
-  config['do_launch_dbus'] = not arguments['--skip-dbus-launch']
-  config['cg_cpu_sub'] = '/sys/fs/cgroup/cpu/{}'.format(config['net_name'])
-  config['cpu_quota'] = arguments['--cpu-quota']
+  config['container'] = '$HOME/.crypted-homes/$APPLICATION_ID'
+  config['fs_type'] = 'ext4'
+  config['hashtool'] = 'sha256sum'
+  config['app_id'] = '$BASENAME-$PATHHASH'
+  config['size'] = '4G'
+  config['teardown_timeout'] = 10
+  # read config
+  if arguments['--config']:
+    config_parser = configparser.ConfigParser()
+    config_file_name = '{}.cfg'.format(arguments['--config'])
+    if os.path.exists(config_file_name):
+      config_parser.read_file(open(config_file_name))
+      config_file_contents = config_parser.items(configparser.DEFAULTSECT)
+      for key, value in config_file_contents:
+        if value: config[key] = json.loads(value)
+  # arguments override
+  if arguments['--fs-type']: config['fs_type'] = arguments['--fs-type'].lower()
+  if arguments['--hash']: config['hashtool'] = arguments['--hash']
+  if arguments['--id']: config['app_id'] = arguments['--id']
+  if arguments['--teardown-timeout']: config['teardown_timeout'] = int(arguments['--teardown-timeout'])
+  if arguments['--key-file' or 'key_file' not in config]: config['key_file'] = arguments['--key-file']
+  if arguments['--nat' or 'do_nat' not in config]: config['do_nat'] = arguments['--nat']
+  if arguments['--xauth' or 'configure_xauth' not in config]: config['configure_xauth'] = arguments['--xauth']
+  if arguments['--skip-xdg-runtime-dir'] or 'xdg_runtime_dir' not in config: config['xdg_runtime_dir'] = '/run/user/$UID' if not arguments['--skip-xdg-runtime-dir'] else False
+  if arguments['--mac-address'] or 'mac_address' not in config: config['mac_address'] = arguments['--mac-address']
+  if arguments['-b'] or 'bind_dirs' not in config: config['bind_dirs'] = arguments['-b']
+  if arguments['--tcpdump'] or 'do_tcpdump' not in config: config['do_tcpdump'] = arguments['--tcpdump']
+  if arguments['--seccomp'] or 'use_seccomp' not in config: config['use_seccomp'] = arguments['--seccomp']
+  if arguments['--skip-dbus-launch'] or 'do_launch_dbus' not in config: config['do_launch_dbus'] = not arguments['--skip-dbus-launch']
+  if arguments['--cpu-quota'] or 'cpu_quota' not in config: config['cpu_quota'] = arguments['--cpu-quota']
   if config['cpu_quota']:
     config['cpu_quota'] = float(config['cpu_quota'])
-  config['cg_devices_sub'] = '/sys/fs/cgroup/devices/{}'.format(config['net_name'])
-  config['restrict_devices'] = not arguments['--skip-devices']
-  config['cg_memory_sub'] = '/sys/fs/cgroup/memory/{}'.format(config['net_name'])
-  config['max_memory'] = arguments['--max-memory']
+  if arguments['--skip-devices'] or 'restrict_devices' not in config: config['restrict_devices'] = not arguments['--skip-devices']
+  if arguments['--max-memory'] or 'max_memory' not in config: config['max_memory'] = arguments['--max-memory']
   if config['max_memory']:
     config['max_memory'] = config['max_memory'].upper()
     if not human2bytes(config['max_memory']):
-      die("Can't parse memory limit argument \"{}\"".format(config['max_memory']))
+      die("Can't parse memory limit option \"{}\"".format(config['max_memory']))
   if arguments['--skip-ipc']:
     config['unshare_flags'].remove('CLONE_NEWIPC')
   if arguments['--skip-network']:
     config['unshare_flags'].remove('CLONE_NEWNET')
   if arguments['--skip-uts']:
     config['unshare_flags'].remove('CLONE_NEWUTS')
+  if arguments['--size']: config['size'] = arguments['--size'].upper()
+  if not human2bytes(config['size']):
+    die("Can't parse size argument \"{}\"".format(config['size']))
+  if 'xauth_key' not in config: config['xauth_key'] = binascii.hexlify(os.urandom(16)).decode()
+  if arguments['--skip-hide-tmp'] or 'hide_tmp' not in config: config['hide_tmp'] = not arguments['--skip-hide-tmp']
+  if arguments['--skip-hide-run'] or 'hide_run' not in config: config['hide_run'] = not arguments['--skip-hide-run']
+  if arguments['--skip-bind-x11-unix'] or 'do_bind_.X11-unix' not in config: config['do_bind_.X11-unix'] = not arguments['--skip-bind-x11-unix']
+  if arguments['--display'] or 'display' not in config: config['display'] = arguments['--display'] if arguments['--display'] else os.getenv('DISPLAY')
+  if arguments['--container'] or 'container' not in config: config['container'] = arguments['--container']
+  # save config
+  if arguments['--config']:
+    if arguments['--write-config']:
+      for key, value in config.items():
+        config_parser.set( configparser.DEFAULTSECT, key, json.dumps(value) )
+      with open(config_file_name, 'w') as configfile:
+        config_parser.write(configfile)
+  # config override
   config['resize'] = arguments['--resize']
   if config['resize']:
     config['resize'] = config['resize'].upper()
     if not human2bytes(config['resize']):
       die("Can't parse resize argument \"{}\"".format(config['resize']))
-  config['size'] = arguments['--size'].upper()
-  if not human2bytes(config['size']):
-    die("Can't parse size argument \"{}\"".format(config['size']))
-  config['xauth_key'] = binascii.hexlify(os.urandom(16))
-  config['hide_tmp'] = not arguments['--skip-hide-tmp']
-  config['hide_run'] = not arguments['--skip-hide-run']
-  config['do_bind_.X11-unix'] = not arguments['--skip-bind-x11-unix']
-  config['display'] = arguments['--display'] if arguments['--display'] else os.getenv('DISPLAY')
+  config['do_mkfs'] = ( arguments['--int-do-mkfs'] is '1' ) if arguments['--int-do-mkfs'] else False
+  config['uid'] = pwd.getpwnam(arguments['--user']).pw_uid if arguments['--user'] else os.getuid()
+  config['gid'] = pwd.getpwuid(config['uid']).pw_gid
+  config['user'] = pwd.getpwuid(config['uid']).pw_name
+  config['home'] = pwd.getpwuid(config['uid']).pw_dir
+  config['superuser'] = os.getuid() is 0
+  config['app_basename'] = os.path.basename(arguments['<application>'])
+  config['app_path'] = distutils.spawn.find_executable(arguments['<application>'])
+  if not config['app_path']:
+    die("Couldn't find application executable for \"{}\"".format(arguments['<application>']))
+  config['app_path_hash'] = subprocess.Popen([config['hashtool']],stdout=subprocess.PIPE,stdin=subprocess.PIPE,stderr=subprocess.DEVNULL).communicate(config['app_path'].encode()+b'\n')[0].decode().split(' ')[0] # extra newline for compability with bash script version
+  config['app_id'] = config['app_id'].replace('$BASENAME',config['app_basename']).replace('$PATHHASH',config['app_path_hash'])
+  config['container'] = config['container'].replace('$HOME',config['home']).replace('$APPLICATION_ID', config['app_id'])
+  config['open_container'] = '/dev/mapper/{}'.format(config['app_id'])
+  config['net_name'] = config['app_id'][:8] + config['app_id'][-7:]
+  config['cg_cpu_sub'] = '/sys/fs/cgroup/cpu/{}'.format(config['net_name'])
+  config['cg_devices_sub'] = '/sys/fs/cgroup/devices/{}'.format(config['net_name'])
+  config['cg_memory_sub'] = '/sys/fs/cgroup/memory/{}'.format(config['net_name'])
+  if config['xdg_runtime_dir']: config['xdg_runtime_dir'] = config['xdg_runtime_dir'].replace('$UID',str(config['uid']))
+  config['app_arguments'] = arguments['<arguments>']
+  config['verbose'] = False
+  if arguments['--verbose']:
+    logging.getLogger().setLevel( logging.DEBUG )
+    config['verbose'] = True
   new_cmdline = [ sys.argv[0] ]
   new_cmdline += [ '--user', config['user'] ]
   new_cmdline += [ '--display', config['display'] ]
   for argument, value in arguments.items():
     if not argument.startswith('-'): continue
+    if argument == '--write-config': continue
     if type(value) is bool:
       if value is True:
         new_cmdline.append( argument )
@@ -193,13 +223,17 @@ def parse_arguments():
       for list_value in value:
         new_cmdline.append( argument )
         new_cmdline.append( list_value )
-  new_cmdline.append( config['app_path'] ) 
+  new_cmdline.append( config['app_path'] )
   new_cmdline += arguments['<arguments>']
   config['cmdline'] = new_cmdline
+  config['fsck'] = distutils.spawn.find_executable('fsck.{}'.format(config['fs_type']))
+  config['mkfs'] = distutils.spawn.find_executable('mkfs.{}'.format(config['fs_type']))
+  config['parent'] = True
+  config['parent_pid'] = os.getpid()
   return config
 
 def escalate_priviledges( config ):
-  if os.getuid() is not 0:
+  if not config['superuser']:
     logging.info('Need to escalate priviledges')
     cmdline = [ config['cmdline'][0] ]
     cmdline += [ '--int-do-mkfs', '1' if config['do_mkfs'] else '0' ]
@@ -310,7 +344,7 @@ def main():
   logging.basicConfig(format='[{}|%(levelname)s] %(message)s'.format(sys.argv[0]),level=logging.INFO)
   config=parse_arguments()
   logging.debug('Configuration:\n{}'.format(config))
-  if os.getuid() is not 0:
+  if not config['superuser']:
     if not config['mkfs']: logging.warning('Mkfs tool for "{}" not found. Not able to format new containers'.format(config['fs_type']))
     if not config['fsck']: logging.warning('Fsck tool for "{}" not found. Not able to check container filesystem'.format(config['fs_type']))
     if not os.path.exists( config['container'] ):
