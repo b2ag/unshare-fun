@@ -2,30 +2,8 @@
 import os
 import sys
 import libseccomp.seccomp
-# create a filter object with a default KILL action
-#f = libseccomp.seccomp.SyscallFilter(defaction=libseccomp.seccomp.KILL)
-blacklist = [
-  '_sysctl', # read/write system parameters
-  'chown', 'chown32', 'fchown', 'fchown32', 'fchownat', 'lchown', 'lchown32', # change ownership of a file
-  'quotactl', # manipulate disk quotas
-  'settimeofday', # set time of day
-  'sethostname', # set hostname
-  'mount', 'umount', 'umount2', # mount and umount filesystem
-  'reboot', # reboot or enable/disable Ctrl-Alt-Del
-# exotic syscals
-  '_llseek', # reposition read/write file offset for lage files on 32-bit platforms
-  'set_tid_address', # set pointer to thread ID
-# deprecated syscalls
-  'fork', # create a child process (replaced by clone with SIGCHLD)
-  'oldwait4', # wait for process to change state, BSD style
-  'epoll_ctl_old', # control interface for an epoll file descriptor
-  'oldstat', 'oldfstat', 'oldlstat', # get file status
-  'olduname', 'oldolduname', # get name and information about current kerne
-  'brk', # change data segment size
-  'ipc', # System V IPC system calls
-  'socketcall', # socket system calls
-]
-whitelist = [
+
+syscalls = [
 ##############
 # filesystem #
 ##############
@@ -34,12 +12,13 @@ whitelist = [
   'close', # close a file descriptor
   'access', 'faccessat', # determine accessibility of a file relative to directory file descriptor
   'statx', # get file status (extended)
-  #'oldstat', 'oldfstat', 'oldlstat', # get file status
+  '!oldstat', '!oldfstat', '!oldlstat', # get file status
   'stat', 'stat64', 'fstat', 'fstat64', 'fstatat64', 'newfstatat', 'lstat', 'lstat64', # get file status
   'statfs', 'statfs64', 'fstatfs', 'fstatfs64', # get filesystem statistics
   'ustat', # get filesystem statistics
   'flock', # apply or remove an advisory lock on an open file
-  #'chown', 'chown32', 'fchown', 'fchown32', 'fchownat', 'lchown', 'lchown32', # change ownership of a file
+  '!chmod', '!fchmod', '!fchmodat', # change permissions of a file
+  '!chown', '!chown32', '!fchown', '!fchown32', '!fchownat', '!lchown', '!lchown32', # change ownership of a file
   'fcntl', # file control
   'fsync', # synchronize changes to a file
   'readlink', 'readlinkat', # read value of a symbolic link
@@ -47,9 +26,9 @@ whitelist = [
   'unlink', 'unlinkat', # delete a name and possibly the file it refers to
   'symlink', 'symlinkat', # make a symbolic link relative to directory file descriptor
   'dup', 'dup2', # duplicate an open file descriptor
-  #'quotactl', # manipulate disk quotas
+  '!quotactl', # manipulate disk quotas
   'umask', # set file mode creation mask
-  #'mount', 'umount', 'umount2', # mount and umount filesystem
+  '!mount', '!umount', '!umount2', # mount and umount filesystem
   'memfd_create', # create an anonymous file
 #################
 # file contents #
@@ -61,7 +40,7 @@ whitelist = [
   'readv', 'preadv', 'preadv2', # read data from multiple buffers
   'writev', 'pwritev', 'pwritev2', # write data into multiple buffers
   'lseek', #  move the read/write file offset
-  #'_llseek', # reposition read/write file offset for lage files on 32-bit platforms
+  '!_llseek', # reposition read/write file offset for lage files on 32-bit platforms
   'fallocate', # preallocate or deallocate space to a file
   'fadvise64', 'fadvise64_64', # predeclare an access pattern for file data
   'readahead', # initiate file readahead into page cache
@@ -99,7 +78,8 @@ whitelist = [
   'sendmsg', # send a message on a socket using a message structure
   'sendmmsg', # send multiple message on a socket
   'recvmsg', # receive a message from a socket
-  #'socketcall', # socket system calls
+  'recvfrom', # receive a message from a socket
+  '!socketcall', # socket system calls
   'setsockopt', 'getsockopt', # set/get the socket options
   'getsockname', # get the socket name
   'getpeername', # get the name of the peer socket
@@ -109,20 +89,23 @@ whitelist = [
 #############
   'getpid', # get process identification
   'setsid', # creates a session and sets the process group ID
-  'getpgid', # get the process group ID for a process
+  'setpgid', 'getpgid', # set/get the process group ID for a process
+  'getpgrp', # get the process group ID
   'gettid', # get thread identification
   'capset', 'capget', # set/get capabilities of thread(s)
-  #'set_tid_address', # set pointer to thread ID
+  '!set_tid_address', # set pointer to thread ID
   'prctl', # operations on a process
   'arch_prctl', # set architecture-specific thread state
-  #'fork', # create a child process (replaced by clone with SIGCHLD)
+  '!fork', # create a child process (replaced by clone with SIGCHLD)
   'clone', # create a child process
   'execve', # execute a program
   'execveat', # execute program relative to a directory file descriptor
   'kill', # send signal to a process
+  'tkill', 'tgkill', # send a signal to a thread
   'exit', # terminate the calling process
   'exit_group', # exit all threads in a process
   'pipe', 'pipe2', # create an interprocess channel
+  'getppid', # get parent process identification
 ###################
 # synchronisation #
 ###################
@@ -130,13 +113,14 @@ whitelist = [
   'futex', # fast user-space locking
   'set_robust_list', 'get_robust_list', # set/get list of robust futexes
   'poll', 'ppoll', # wait for some event on a file descriptor
-  #'oldwait4', # wait for process to change state, BSD style
+  '!oldwait4', # wait for process to change state, BSD style
   'wait4', # wait for process to change state, BSD style
   'epoll_create', 'epoll_create1', # open an epoll file descriptor
-  #'epoll_ctl_old', # control interface for an epoll file descriptor
+  '!epoll_ctl_old', # control interface for an epoll file descriptor
   'epoll_ctl', # control interface for an epoll file descriptor
   'epoll_wait', 'epoll_pwait', # wait for an I/O event on an epoll file descriptor
   'eventfd', 'eventfd2', # create a file descriptor for event notification
+  'pause', # wait for signal
 ##############
 # scheduling #
 ##############
@@ -163,7 +147,7 @@ whitelist = [
 ##########
 # memory #
 ##########
-  #'brk', # change data segment size
+  '!brk', # change data segment size
   'madvise', # give advice about use of memory
   'mmap', 'mmap2', 'munmap', # map files or devices into memory
   'mprotect', # set protection of memory mapping
@@ -191,32 +175,49 @@ whitelist = [
   'getresgid', 'getresgid32', # get real, effective and saved group IDs
   'setfsuid', 'setfsuid32', # set user identity used for filesystem checks
   'setfsgid', 'setfsgid32', # set group identity used for filesystem checks
+########
+# time #
+########
+  '!settimeofday', 'gettimeofday', # set/get time of day
+  '!clock_settime', # set the time of the specified clock
+  '!clock_gettime', # set the time of the specified clock
+  'clock_getres', # finds the resolution (precision) of the specified clock
+  'clock_nanosleep', # high resolution sleep
+  '!clock_adjtime', # correct the time to synchronize the system clock
 ##########
 # system #
 ##########
-  #'settimeofday', # set time of day
-  'gettimeofday', # get time of day
-  #'sethostname', # set hostname
-  #'_sysctl', # read/write system parameters
-  #'olduname', 'oldolduname', # get name and information about current kerne
+  '!sethostname', # set hostname
+  '!_sysctl', # read/write system parameters
+  '!olduname', '!oldolduname', # get name and information about current kerne
   'uname', # get name and information about current kernel
   'seccomp', # operate on Secure Computing state of the process
   'sysinfo', # return system information
   'getrusage', # get information about resource utilization
   'setrlimit', 'getrlimit', 'ugetrlimit', 'prlimit64', # set/get resource limits
-  #'reboot', # reboot or enable/disable Ctrl-Alt-Del
+  '!reboot', # reboot or enable/disable Ctrl-Alt-Del
 ##########
 # others #
 ##########
   'getrandom', # obtain a series of random bytes
   'ipc', # System V IPC system calls
-  #'restart_syscall', # restart a system call after interruption by a stop signal
+  '!restart_syscall', # restart a system call after interruption by a stop signal
 ]
+
 unimplemented = [ 'afs_syscall', 'break', 'ftime', 'getpmsg', 'gtty', 'lock', 'mpx', 'prof', 'profil', 'putpmsg', 'security', 'stty', 'tuxcall', 'ulimit', 'vserver' ]
+
 specials = {
    # needed by strace -qcf ?
-  'restart_syscall': libseccomp.seccomp.LOG,
+  #'restart_syscall': libseccomp.seccomp.LOG,
 }
+
+blacklist = []
+whitelist = []
+for syscall in syscalls:
+  if syscall.startswith('!'):
+    blacklist.append(syscall[1:])
+  else:
+    whitelist.append(syscall)
 
 f = libseccomp.seccomp.SyscallFilter(defaction=libseccomp.seccomp.LOG)
 for syscall in blacklist:
