@@ -29,6 +29,8 @@ syscalls = [
   'umask', # set file mode creation mask
   '-mount', '-umount', '-umount2', # mount and umount filesystem
   'memfd_create', # create an anonymous file
+  'utime', # set file access and modification times
+  'utimensat', 'utimes', # set file access and modification times relative to directory file descriptor
   'futimesat', # change timestamps of a file relative to a directory file descriptor
 #######################
 # extended attributes #
@@ -58,10 +60,16 @@ syscalls = [
   'fallocate', # preallocate or deallocate space to a file
   'fadvise64', 'fadvise64_64', # predeclare an access pattern for file data
   'readahead', # initiate file readahead into page cache
+  'truncate', 'truncate64', # truncate a file to a specified length
   'ftruncate', 'ftruncate64', # truncate a file to a specified length
   'fdatasync', # synchronize the data of a file (REALTIME)
   'copy_file_range', # Copy a range of data from one file to another
   'sendfile', 'sendfile64', # transfer data between file descriptors
+  'splice', # splice data to/from a pipe
+  'vmsplice', # splice user pages into a pipe
+  'tee', # duplicating pipe content
+  'sync', 'syncfs', # commit filesystem caches to disk
+  'sync_file_range', 'sync_file_range2', # sync a file segment with disk
 ###########
 # devices #
 ###########
@@ -144,6 +152,9 @@ syscalls = [
   'pause', # wait for signal
   'waitpid', # wait for a child process to stop or terminate
   'waitid', # wait for a child process to change state
+  'semctl', # XSI semaphore control operations
+  'semget', # get set of XSI semaphores
+  'semop', 'semtimedop', # System V semaphore operations
 ##############
 # scheduling #
 ##############
@@ -159,6 +170,8 @@ syscalls = [
 ###########
 # signals #
 ###########
+  'signal', # signal management
+  'signalfd', 'signalfd4', # create a file descriptor for accepting signals
   'sigaction', 'rt_sigaction', # examine and change a signal action
   'sigprocmask', 'rt_sigprocmask', # examine and change blocked signals
   'sigreturn', 'rt_sigreturn', # return from signal handler and cleanup stack frame
@@ -191,7 +204,8 @@ syscalls = [
   '-mincore', # determine whether pages are resident in memory
   '-mlock', '-mlock2', '-munlock', '-mlockall', '-munlockall', # lock and unlock memory
   '-mremap', # remap a virtual memory address
-  'msync', # synchronize memory with physical storage
+  '-msync', # synchronize memory with physical storage
+  '-swapon', '-swapoff', # start/stop swapping to file/device
 ##################
 # message queues #
 ##################
@@ -224,9 +238,12 @@ syscalls = [
   '-setfsgid', '-setfsgid32', # set group identity used for filesystem checks
   '-setgroups', '-setgroups32', # set list of supplementary group IDs
   'getgroups', 'getgroups32', # get list of supplementary group IDs
+  '-swapcontext', # manipulate user context
 ########
 # time #
 ########
+  'time', # get time in seconds
+  '-stime', # set time
   '-settimeofday', 'gettimeofday', # set/get time of day
   '-clock_settime', 'clock_gettime', # set/get the time of the specified clock
   'clock_getres', # finds the resolution (precision) of the specified clock
@@ -234,12 +251,18 @@ syscalls = [
   '-clock_adjtime', # correct the time to synchronize the system clock
   'nanosleep', # high-resolution sleep
   '-adjtimex', # tune kernel clock
+  'timer_create', # create a POSIX per-process timer
+  'timer_delete', # delete a per-process timer
+  'timer_getoverrun', 'timer_gettime', 'timer_settime', # per-process timers
+  '-timerfd', # ?
+  'timerfd_create', 'timerfd_settime', 'timerfd_gettime', # timers that notify via file descriptors
 ##########
 # system #
 ##########
   '-getcpu', # determine CPU and NUMA node on which the calling thread is running
   '-sethostname', # set hostname
   '-_sysctl', # read/write system parameters
+  '-setdomainname', # set NIS domain name
   'uname', # get name and information about current kernel
   'seccomp', # operate on Secure Computing state of the process
   'sysinfo', # return system information
@@ -253,6 +276,8 @@ syscalls = [
   '!kexec_load', '!kexec_file_load', # load a new kernel for later execution
   '!pciconfig_read', '!pciconfig_write', '!pciconfig_iobase', # pci device information handling
   '!personality', # set the process execution domain
+  '!syscall', # indirect system call
+  '-syslog', # read and/or clear kernel message ring buffer; set console_loglevel
 ##################
 # key management #
 ##################
@@ -265,22 +290,41 @@ syscalls = [
   '-acct', # switch process accounting on or off
   '-perf_event_open', # set up performance monitoring
   '!lookup_dcookie', # return a directory entry's path (used only by oprofile)
+  'times', # get process times
 ##########
 # others #
 ##########
   'getrandom', # obtain a series of random bytes
   '-restart_syscall', # restart a system call after interruption by a stop signal
-  '!arm_fadvise64_64', '!arm_sync_file_range', # wrong architecture
   '-bpf', # perform a command on an extended BPF map or program
   '!nfsservctl', # syscall interface to kernel nfs daemon
+  '-setns', # reassociate thread with a namespace
+  '-unshare', # run program with some namespaces unshared from parent
+  '-userfaultfd', # create a file descriptor for handling page faults in user space
+  '-vhangup', # virtually hangup the current terminal
 ##########
 # unsure #
 ##########
-  '-breakpoint', #
-  '-cachectl', #
-  '-multiplexer', #
-
-  '-get_tls', # new TLS API?
+  '-breakpoint',
+  '-cachectl',
+  '-multiplexer',
+  '-rtas',
+  '-switch_endian',
+  '-sys_debug_setcontext',
+  '-sysmips',
+  '-usr26', '-usr32',
+  '-set_tls', '-get_tls', # new TLS API?
+######################
+# wrong architecture #
+######################
+  '!arm_fadvise64_64', '!arm_sync_file_range', # wrong architecture
+  '!s390_runtime_instr', # enable/disable s390 CPU run-time instrumentation
+  '!s390_pci_mmio_write', '!s390_pci_mmio_read', # transfer data to/from PCI MMIO memory page
+  '!s390_guarded_storage', 
+  '!s390_sthyi', # emulate STHYI instruction
+  '!spu_create', # create a new spu context
+  '!spu_run', # execute an SPU context
+  '!subpage_prot', # define a subpage protection for an address range
 ###############################
 # deprecated or unimplemented #
 ###############################
@@ -295,10 +339,15 @@ syscalls = [
   '!socketcall', # socket system calls
   '!_llseek', # reposition read/write file offset for lage files on 32-bit platforms
   '!ipc', # System V IPC system calls
-  '!fork', # create a child process
+  '-fork', # create a child process
+  '-vfork', # create a child process and block parent
   '-brk', # change data segment size
   '-setitimer', '-getitimer', # get and set value of interval timer
-  'modify_ldt', # get or set a per-process LDT entry
+  '-modify_ldt', # get or set a per-process LDT entry
+  '-ssetmask', '-sgetmask', # manipulation of signal mask (obsolete)
+  '-sysfs', # get filesystem type information
+  '-uselib', # load shared library
+  '!vm86old', '!vm86', # enter virtual 8086 mode
 ]
 
 
