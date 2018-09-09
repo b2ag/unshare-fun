@@ -123,6 +123,7 @@ def parse_arguments():
   config['app_id'] = '$BASENAME-$PATHHASH'
   config['size'] = '4G'
   config['teardown_timeout'] = 10
+  config['seccomp_syscalls'] = syscalls
   # read config
   if arguments['--config']:
     config_parser = configparser.ConfigParser()
@@ -177,6 +178,8 @@ def parse_arguments():
         config_parser.set( configparser.DEFAULTSECT, key, json.dumps(value) )
       with open(config_file_name, 'w') as configfile:
         config_parser.write(configfile)
+      logging.info('Successfully writen config "{}"'.format(config_file_name))
+      sys.exit(0)
   # config override
   config['resize'] = arguments['--resize']
   if config['resize']:
@@ -212,7 +215,6 @@ def parse_arguments():
   new_cmdline += [ '--display', config['display'] ]
   for argument, value in arguments.items():
     if not argument.startswith('-'): continue
-    if argument == '--write-config': continue
     if type(value) is bool:
       if value is True:
         new_cmdline.append( argument )
@@ -693,7 +695,7 @@ def main():
       if config['use_seccomp']:
         import libseccomp.seccomp
         f = libseccomp.seccomp.SyscallFilter(defaction=libseccomp.seccomp.LOG)
-        for syscall in syscalls:
+        for syscall in config['seccomp_syscalls']:
           if syscall.startswith('-'):
             f.add_rule( libseccomp.seccomp.ERRNO(126), syscall[1:] )
           elif syscall.startswith('!'):

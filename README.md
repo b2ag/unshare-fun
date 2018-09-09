@@ -11,25 +11,28 @@ Info: This script is Python rewrite of "per-app-crypted-home.bash" including add
 ### Usage
 ```
 Usage: 
-  ./per-app-crypted-home.py [options] [-b<DIR>]... [--] <application> [<arguments>...]
+  per-app-crypted-home.py [options] [-b<DIR>]... [--] <application> [<arguments>...]
 
 Runs application within an encrypted sandboxed filesystem used as home shadowing users original home directory.
 
 Options:
   -b DIRECTORY                    Bind mount given subdirectory of home into containers home
-  -c, --container=FILE            File used as container for encrypted home [default: $HOME/.crypted-homes/$APPLICATION_ID]
+  --container=FILE                File used as container for encrypted home (default: $HOME/.crypted-homes/$APPLICATION_ID)
+  -c, --config=NAME               Use a config file
   --cpu-quota=FLOAT               Quota for CPU time ( 0.5 = 50% of 1 core, 4 = 100% of 4 cores )
-  -f, --fs-type=TYPE              Filesystem type inside container [default: ext4]
+  -d, --display=DISPLAY           Display to use
+  -f, --fs-type=TYPE              Filesystem type inside container (default: ext4)
   -h, --help                      Display this help and exits
-  -H, --hash=COMMAND              Hash executable used to build application identifier [default: sha256sum]
-  -i, --id=APPLICATION_ID         Application identifier [default: $BASENAME-$PATHHASH]
+  -H, --hash=COMMAND              Hash executable used to build application identifier (default: sha256sum)
+  -i, --id=APPLICATION_ID         Application identifier (default: $BASENAME-$PATHHASH)
+  --int-do-mkfs=<0|1>             Used internally when becoming root after creating a new container
   -k, --key-file=FILE             Use key from FILE instead of passphrase for dm-crypt
   -m, --mac-address=MAC           Spoof virtual ethernet MAC address
   --max-memory=SIZE               Set memory limit for container
   -n, --nat                       Setup NAT for internet access
   -q, --quiet                     Suppress extra output
   -r, --resize=SIZE               Resize an existing container
-  -s, --size=SIZE                 Maximum size of container [default: 4G]
+  -s, --size=SIZE                 Maximum size of container (default: 4G)
   --seccomp                       Sandbox syscalls with seccomp
   --skip-dbus-launch              Skip DBUS launch inside container
   --skip-devices                  Skip restricting devices access inside container
@@ -39,12 +42,14 @@ Options:
   --skip-network                  Skip network virtualisation
   --skip-uts                      Skip UTS (hostname) virtualisation
   --skip-bind-x11-unix            Skip bind mount of /tmp/.X11-unix
-  --skip-xdg-runtime-dir          Skip shadowing of XDG_RUNTIME_DIR
+  --skip-xdg-runtime-dir          Skip providing XDG_RUNTIME_DIR
+  -u, --user=USER                 User to run as
   -v, --verbose                   Verbose logging output 
   --version                       Shows version and exits
+  -w, --write-config              Write current settings to config
   -x, --xauth                     Xauth cookie handling
   -t, --tcpdump                   Dump reduced version of network traffic with tcpdump
-  --teardown-timeout=SECONDS      Timeout for closing the container in seconds [default: 10]
+  --teardown-timeout=SECONDS      Timeout for closing the container in seconds (default: 10)
 ```
 
 ### Simple example
