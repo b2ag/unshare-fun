@@ -208,7 +208,6 @@ def escalate_priviledges( config ):
       os.execvp( 'sudo', [ 'sudo' ] + cmdline )
     else:
       os.execvp( 'pkexec', [ 'pkexec' ] + cmdline )
-      
   die('Should not get here')
 
 def try_close_container( config ):
@@ -568,7 +567,7 @@ def main():
       if libc.mount( b'tmpfs', b'/home', b'tmpfs', ['MS_NOSUID','MS_NOEXEC','MS_NODEV'], ctypes.c_char_p(0) ) is not 0:
         die('Could not hide "/home": {}'.format(os.strerror(ctypes.get_errno())))
       os.mkdir( config['home'] )
-      
+
     # mount home
     if libc.mount( 
          config['open_container'].encode(), 
@@ -655,17 +654,6 @@ def main():
       os.setgid( int(config['gid']) )
       os.setuid( int(config['uid']) )
 
-    # launch dbus
-    if config['do_launch_dbus']:
-      if not config['xdg_runtime_dir']:
-        die("Can not launch dbus without faking XDG_RUNTIME_DIR")
-      dbus = subprocess.Popen(['dbus-daemon','--session','--address=unix:path={xdg_runtime_dir}/bus-{net_name}'.format(**config),'--nosyslog','--print-address'],stdout=subprocess.PIPE,preexec_fn=change_user)
-      dbus_address = dbus.stdout.readline().strip()
-      os.environ['DBUS_SESSION_BUS_ADDRESS'] = dbus_address.decode()
-
-    # export DISPLAY
-    os.environ['DISPLAY'] = config['display']
-
     def application_preexec():
       change_user()
       if config['use_seccomp']:
@@ -680,6 +668,17 @@ def main():
             f.add_rule( libseccomp.seccomp.ALLOW, syscall )
         f.load()
       #libc.prctl( PR_SET_SECCOMP, SECCOMP_MODE_STRICT, 0, 0, 0 )
+
+    # launch dbus
+    if config['do_launch_dbus']:
+      if not config['xdg_runtime_dir']:
+        die("Can not launch dbus without faking XDG_RUNTIME_DIR")
+      dbus = subprocess.Popen(['dbus-daemon','--session','--address=unix:path={xdg_runtime_dir}/bus-{net_name}'.format(**config),'--nosyslog','--print-address'],stdout=subprocess.PIPE,preexec_fn=application_preexec)
+      dbus_address = dbus.stdout.readline().strip()
+      os.environ['DBUS_SESSION_BUS_ADDRESS'] = dbus_address.decode()
+
+    # export DISPLAY
+    os.environ['DISPLAY'] = config['display']
 
     # finally launch our application ...
     application = subprocess.Popen([config['app_path']]+config['app_arguments'],preexec_fn=application_preexec )
