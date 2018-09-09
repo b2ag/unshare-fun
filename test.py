@@ -8,20 +8,20 @@ syscalls = [
 # filesystem #
 ##############
   'open', 'openat', 'creat', # open and possibly create a file
-  'open_by_handle_at', # obtain handle for a pathname and open file via a handle
+  'name_to_handle_at', 'open_by_handle_at', # obtain handle for a pathname and open file via a handle
   'close', # close a file descriptor
   'access', 'faccessat', # determine accessibility of a file relative to directory file descriptor
-  'statx', # get file status (extended)
   'stat', 'stat64', 'fstat', 'fstat64', 'fstatat64', 'newfstatat', 'lstat', 'lstat64', # get file status
   'statfs', 'statfs64', 'fstatfs', 'fstatfs64', # get filesystem statistics
   'ustat', # get filesystem statistics
   'flock', # apply or remove an advisory lock on an open file
   '-chmod', '-fchmod', '-fchmodat', # change permissions of a file
   '-chown', '-chown32', '-fchown', '-fchown32', '-fchownat', '-lchown', '-lchown32', # change ownership of a file
-  'fcntl', # file control
+  'fcntl', 'fcntl64', # file control
   'fsync', # synchronize changes to a file
   'readlink', 'readlinkat', # read value of a symbolic link
   'rename', 'renameat', 'renameat2', # change the name or location of a file
+  '-link', '-linkat', # make a new name for a file
   'unlink', 'unlinkat', # delete a name and possibly the file it refers to
   'symlink', 'symlinkat', # make a symbolic link relative to directory file descriptor
   'dup', 'dup2', 'dup3', # duplicate an open file descriptor
@@ -29,11 +29,22 @@ syscalls = [
   'umask', # set file mode creation mask
   '-mount', '-umount', '-umount2', # mount and umount filesystem
   'memfd_create', # create an anonymous file
-###########
-# inotify #
-###########
+  'futimesat', # change timestamps of a file relative to a directory file descriptor
+#######################
+# extended attributes #
+#######################
+  '-statx', # get file status (extended)
+  '-getxattr', '-lgetxattr', '-fgetxattr', # retrieve an extended attribute value
+  '-listxattr', '-llistxattr', '-flistxattr', # list extended attribute names
+  '-removexattr', '-lremovexattr', '-fremovexattr', # remove an extended attribute
+  '-setxattr', '-lsetxattr', '-fsetxattr', # set an extended attribute value
+##########
+# notify #
+##########
   'inotify_init', 'inotify_init1', # initialize an inotify instance
   'inotify_add_watch', 'inotify_rm_watch', # add/remove a watch on an initialized inotify instance
+  'fanotify_init', # create and initialize fanotify group
+  'fanotify_mark', # add, remove, or modify an fanotify mark on a filesystem object
 #################
 # file contents #
 #################
@@ -49,6 +60,8 @@ syscalls = [
   'readahead', # initiate file readahead into page cache
   'ftruncate', 'ftruncate64', # truncate a file to a specified length
   'fdatasync', # synchronize the data of a file (REALTIME)
+  'copy_file_range', # Copy a range of data from one file to another
+  'sendfile', 'sendfile64', # transfer data between file descriptors
 ###########
 # devices #
 ###########
@@ -66,23 +79,26 @@ syscalls = [
 # directories #
 ###############
   'getdents', 'getdents64', # get directory entries
+  'readdir', # read a directory
   'mkdir', 'mkdirat', # create a directory
   'rmdir', # delete a directory
   'getcwd', # get current working directory
   'chdir', 'fchdir', # change working directory
+  '!chroot', # change root directory
+  '!pivot_root', # change the root filesystem
 ###########
 # sockets #
 ###########
   'socket', # create an endpoint for communication
   'socketpair', # create a pair of connected sockets
   'bind', # bind a name to a socket
+  'listen', # listen for connections on a socket
   'connect', # set and get signal alternate stack context
   'accept', 'accept4', # accept a connection on a socket
-  'sendto', # send a message on a socket
-  'sendmsg', # send a message on a socket using a message structure
-  'sendmmsg', # send multiple message on a socket
-  'recvmsg', # receive a message from a socket
-  'recvfrom', # receive a message from a socket
+  'send', 'sendto', 'sendmsg', # send a message on a socket
+  'recv', 'recvfrom', 'recvmsg', # receive a message from a socket
+  'sendmmsg', # send multiple messages on a socket
+  'recvmmsg', # receive multiple messages from a socket
   'setsockopt', 'getsockopt', # set/get the socket options
   'getsockname', # get the socket name
   'getpeername', # get the name of the peer socket
@@ -91,6 +107,7 @@ syscalls = [
 # processes #
 #############
   'getpid', # get process identification
+  'getsid', # get the process group ID of a session leader
   'setsid', # creates a session and sets the process group ID
   'setpgid', 'getpgid', # set/get the process group ID for a process
   'getpgrp', # get the process group ID
@@ -99,7 +116,6 @@ syscalls = [
   'set_tid_address', # set pointer to thread ID
   'prctl', # operations on a process
   'arch_prctl', # set architecture-specific thread state
-  '-fork', # create a child process (replaced by clone with SIGCHLD)
   'clone', # create a child process
   'execve', # execute a program
   'execveat', # execute program relative to a directory file descriptor
@@ -109,6 +125,10 @@ syscalls = [
   'exit_group', # exit all threads in a process
   'pipe', 'pipe2', # create an interprocess channel
   'getppid', # get parent process identification
+  '!idle', # make process 0 idle
+  '!kcmp', # compare two processes to determine if they share a kernel resource
+  '-process_vm_readv', '-process_vm_writev', # transfer data between process address spaces
+  '!ptrace', # process trace
 ###################
 # synchronisation #
 ###################
@@ -122,6 +142,8 @@ syscalls = [
   'epoll_wait', 'epoll_pwait', # wait for an I/O event on an epoll file descriptor
   'eventfd', 'eventfd2', # create a file descriptor for event notification
   'pause', # wait for signal
+  'waitpid', # wait for a child process to stop or terminate
+  'waitid', # wait for a child process to change state
 ##############
 # scheduling #
 ##############
@@ -133,6 +155,7 @@ syscalls = [
   'sched_setscheduler', 'sched_getscheduler', # get scheduling policy (REALTIME)
   'sched_rr_get_interval', # get execution time limits (REALTIME)
   'setpriority', 'getpriority', # get and set the nice value
+  '-nice', # nice - change process priority
 ###########
 # signals #
 ###########
@@ -148,17 +171,40 @@ syscalls = [
 ##########
 # memory #
 ##########
-  '-brk', # change data segment size
+  '-mbind', # set memory policy for a memory range
+  'membarrier', # issue memory barriers on a set of threads
   'madvise', # give advice about use of memory
   'mmap', 'mmap2', 'munmap', # map files or devices into memory
-  'mprotect', # set protection of memory mapping
-  'set_mempolicy', # set default NUMA memory policy for a thread and its children
+  'remap_file_pages', # create a nonlinear file mapping
+  'mprotect', 'pkey_mprotect', # set protection on a region of memory
+  'pkey_alloc', 'pkey_free', # allocate or free a protection key
+  '-set_mempolicy', # set default NUMA memory policy for a thread and its children
   'get_mempolicy', # retrieve NUMA memory policy for a thread
   'set_thread_area', 'get_thread_area', # set a GDT entry for thread-local storage
-  'shmctl', # XSI shared memory control operations
+  '-shmctl', # XSI shared memory control operations
   'shmat', # XSI shared memory attach operation
   'shmdt', # XSI shared memory detach operation
   'shmget', # get an XSI shared memory segment
+  '-cacheflush', # flush contents of instruction and/or data cache
+  '-migrate_pages', # move all pages in a process to another set of nodes
+  '-move_pages', # move individual pages of a process to another node
+  '-mincore', # determine whether pages are resident in memory
+  '-mlock', '-mlock2', '-munlock', '-mlockall', '-munlockall', # lock and unlock memory
+  '-mremap', # remap a virtual memory address
+  'msync', # synchronize memory with physical storage
+##################
+# message queues #
+##################
+  '-mq_open', # open a message queue
+  '-mq_getsetattr', # get/set message queue attributes
+  '-mq_notify', # register for notification when a message is available
+  '-mq_timedreceive', # receive a message from a message queue
+  '-mq_timedsend', # send a message to a message queue
+  '-mq_unlink', # remove a message queue
+  '-msgctl', # XSI message control operations
+  '-msgget', # get the XSI message queue identifier
+  '-msgrcv', # XSI message receive operation
+  '-msgsnd', # XSI message send operation
 ########
 # user #
 ########
@@ -176,6 +222,8 @@ syscalls = [
   'getresgid', 'getresgid32', # get real, effective and saved group IDs
   '-setfsuid', '-setfsuid32', # set user identity used for filesystem checks
   '-setfsgid', '-setfsgid32', # set group identity used for filesystem checks
+  '-setgroups', '-setgroups32', # set list of supplementary group IDs
+  'getgroups', 'getgroups32', # get list of supplementary group IDs
 ########
 # time #
 ########
@@ -189,6 +237,7 @@ syscalls = [
 ##########
 # system #
 ##########
+  '-getcpu', # determine CPU and NUMA node on which the calling thread is running
   '-sethostname', # set hostname
   '-_sysctl', # read/write system parameters
   'uname', # get name and information about current kernel
@@ -200,34 +249,56 @@ syscalls = [
   '!create_module', # create a loadable module entry
   '!init_module', '!finit_module', # load a kernel module
   '!delete_module', # unload a kernel module
+  '!query_module', # query the kernel for various bits pertaining to module
   '!kexec_load', '!kexec_file_load', # load a new kernel for later execution
+  '!pciconfig_read', '!pciconfig_write', '!pciconfig_iobase', # pci device information handling
+  '!personality', # set the process execution domain
 ##################
 # key management #
 ##################
-  'add_key', # add a key to the kernel's key management facility
+  '!add_key', # add a key to the kernel's key management facility
+  '!keyctl', # manipulate the kernel's key management facility
+  '!request_key', # request a key from the kernel's key management facility
 #############
 # profiling #
 #############
   '-acct', # switch process accounting on or off
+  '-perf_event_open', # set up performance monitoring
+  '!lookup_dcookie', # return a directory entry's path (used only by oprofile)
 ##########
 # others #
 ##########
   'getrandom', # obtain a series of random bytes
-  'ipc', # System V IPC system calls
   '-restart_syscall', # restart a system call after interruption by a stop signal
   '!arm_fadvise64_64', '!arm_sync_file_range', # wrong architecture
   '-bpf', # perform a command on an extended BPF map or program
+  '!nfsservctl', # syscall interface to kernel nfs daemon
+##########
+# unsure #
+##########
+  '-breakpoint', #
+  '-cachectl', #
+  '-multiplexer', #
+
+  '-get_tls', # new TLS API?
 ###############################
 # deprecated or unimplemented #
 ###############################
   '!afs_syscall', '!break', '!ftime', '!getpmsg', '!gtty', '!lock', '!mpx', '!prof', '!profil', '!putpmsg', '!security', '!stty', '!tuxcall', '!ulimit', '!vserver',
-  '-bdflush', # start, flush, or tune buffer-dirty-flush daemon
-  '-oldstat', '-oldfstat', '-oldlstat', # get file status
-  '-olduname', '-oldolduname', # get name and information about current kernel
-  '-epoll_ctl_old', # control interface for an epoll file descriptor
-  '-oldwait4', # wait for process to change state, BSD style
-  '-socketcall', # socket system calls
-  '-_llseek', # reposition read/write file offset for lage files on 32-bit platforms
+  '!get_kernel_syms', # retrieve exported kernel and module symbols
+  '!bdflush', # start, flush, or tune buffer-dirty-flush daemon
+  '!oldstat', '!oldfstat', '!oldlstat', # get file status
+  '!olduname', '!oldolduname', # get name and information about current kernel
+  '!epoll_ctl_old', # control interface for an epoll file descriptor
+  '!epoll_wait_old', # wait for an I/O event on an epoll file descriptor
+  '!oldwait4', # wait for process to change state, BSD style
+  '!socketcall', # socket system calls
+  '!_llseek', # reposition read/write file offset for lage files on 32-bit platforms
+  '!ipc', # System V IPC system calls
+  '!fork', # create a child process
+  '-brk', # change data segment size
+  '-setitimer', '-getitimer', # get and set value of interval timer
+  'modify_ldt', # get or set a per-process LDT entry
 ]
 
 
