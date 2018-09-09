@@ -6,11 +6,12 @@ import libseccomp.seccomp
 #f = libseccomp.seccomp.SyscallFilter(defaction=libseccomp.seccomp.KILL)
 blacklist = [
   '_sysctl', # read/write system parameters
-  'fchown', # change owner and group of a file
-  'fchownat', # change owner and group of a file relative to directory file descriptor
+  'chown', 'chown32', 'fchown', 'fchown32', 'fchownat', 'lchown', 'lchown32', # change ownership of a file
   'quotactl', # manipulate disk quotas
   'settimeofday', # set time of day
   'sethostname', # set hostname
+  'mount', 'umount', 'umount2', # mount and umount filesystem
+  'reboot', # reboot or enable/disable Ctrl-Alt-Del
 # exotic syscals
   '_llseek', # reposition read/write file offset for lage files on 32-bit platforms
   'set_tid_address', # set pointer to thread ID
@@ -38,8 +39,7 @@ whitelist = [
   'statfs', 'statfs64', 'fstatfs', 'fstatfs64', # get filesystem statistics
   'ustat', # get filesystem statistics
   'flock', # apply or remove an advisory lock on an open file
-  #'fchown', # change owner and group of a file
-  #'fchownat', # change owner and group of a file relative to directory file descriptor
+  #'chown', 'chown32', 'fchown', 'fchown32', 'fchownat', 'lchown', 'lchown32', # change ownership of a file
   'fcntl', # file control
   'fsync', # synchronize changes to a file
   'readlink', 'readlinkat', # read value of a symbolic link
@@ -48,6 +48,9 @@ whitelist = [
   'symlink', 'symlinkat', # make a symbolic link relative to directory file descriptor
   'dup', 'dup2', # duplicate an open file descriptor
   #'quotactl', # manipulate disk quotas
+  'umask', # set file mode creation mask
+  #'mount', 'umount', 'umount2', # mount and umount filesystem
+  'memfd_create', # create an anonymous file
 #################
 # file contents #
 #################
@@ -75,6 +78,7 @@ whitelist = [
   'io_getevents', # read asynchronous I/O events from the completion queue
   'io_setup', # create an asynchronous I/O context
   'io_submit', # submit asynchronous I/O blocks for processing
+  'mknod', 'mknodat', # create a special or ordinary file
 ###############
 # directories #
 ###############
@@ -82,6 +86,7 @@ whitelist = [
   'mkdir', 'mkdirat', # create a directory
   'rmdir', # delete a directory
   'getcwd', # get current working directory
+  'chdir', 'fchdir', # change working directory
 ###########
 # sockets #
 ###########
@@ -97,6 +102,8 @@ whitelist = [
   #'socketcall', # socket system calls
   'setsockopt', 'getsockopt', # set/get the socket options
   'getsockname', # get the socket name
+  'getpeername', # get the name of the peer socket
+  'shutdown', # shut down part of a full-duplex connection
 #############
 # processes #
 #############
@@ -164,6 +171,9 @@ whitelist = [
   'get_mempolicy', # retrieve NUMA memory policy for a thread
   'set_thread_area', 'get_thread_area', # set a GDT entry for thread-local storage
   'shmctl', # XSI shared memory control operations
+  'shmat', # XSI shared memory attach operation
+  'shmdt', # XSI shared memory detach operation
+  'shmget', # get an XSI shared memory segment
 ########
 # user #
 ########
@@ -174,7 +184,7 @@ whitelist = [
   'setreuid', 'setreuid32', # set real and/or effective user ID
   'geteuid', 'geteuid32', # get effective user ID 
   'setregid', 'setregid32', # set real and/or effective group ID
-  'getegid', 'getegid32' # get effective group ID
+  'getegid', 'getegid32', # get effective group ID
   'setresuid', 'setresuid32', # set real, effective and saved group IDs
   'getresuid', 'getresuid32', # get real, effective and saved group IDs
   'setresgid', 'setresgid32', # set real, effective and saved group IDs
@@ -187,7 +197,6 @@ whitelist = [
   #'settimeofday', # set time of day
   'gettimeofday', # get time of day
   #'sethostname', # set hostname
-  'gethostname', # get hostname
   #'_sysctl', # read/write system parameters
   #'olduname', 'oldolduname', # get name and information about current kerne
   'uname', # get name and information about current kernel
@@ -195,12 +204,15 @@ whitelist = [
   'sysinfo', # return system information
   'getrusage', # get information about resource utilization
   'setrlimit', 'getrlimit', 'ugetrlimit', 'prlimit64', # set/get resource limits
+  #'reboot', # reboot or enable/disable Ctrl-Alt-Del
 ##########
 # others #
 ##########
   'getrandom', # obtain a series of random bytes
   'ipc', # System V IPC system calls
+  #'restart_syscall', # restart a system call after interruption by a stop signal
 ]
+unimplemented = [ 'afs_syscall', 'break', 'ftime', 'getpmsg', 'gtty', 'lock', 'mpx', 'prof', 'profil', 'putpmsg', 'security', 'stty', 'tuxcall', 'ulimit', 'vserver' ]
 specials = {
    # needed by strace -qcf ?
   'restart_syscall': libseccomp.seccomp.LOG,
@@ -211,26 +223,32 @@ for syscall in blacklist:
   try:
     f.add_rule( libseccomp.seccomp.ERRNO(126), syscall )
   except RuntimeError as e:
-    print('syscall = {}'.format(syscall))
+    print('Blacklist error on syscall "{}"'.format(syscall))
     print(e)
 for syscall in whitelist:
   try:
     f.add_rule( libseccomp.seccomp.ALLOW, syscall )
   except RuntimeError as e:
-    print('syscall = {}'.format(syscall))
+    print('Whitelist error on syscall "{}"'.format(syscall))
+    print(e)
+for syscall in unimplemented:
+  try:
+    f.add_rule( libseccomp.seccomp.KILL, syscall )
+  except RuntimeError as e:
+    print('Unimplemented list error on syscall "{}"'.format(syscall))
     print(e)
 for syscall, action in specials.items():
   try:
     f.add_rule( action, syscall )
   except RuntimeError as e:
-    print('syscall = {}'.format(syscall))
+    print('Specials list error on syscall "{}"'.format(syscall))
     print(e)
 
 # load the filter into the kernel
 f.load()
 
 # start shell
-print('Blacklisted: {}  Whitelisted: {}'.format(len(blacklist),len(whitelist)))
+print('Blacklisted:{} Unimplemented:{} Whitelisted:{}'.format(len(blacklist),len(unimplemented),len(whitelist)))
 print("ENTER")
 os.system('zsh')
 print("EXIT")
