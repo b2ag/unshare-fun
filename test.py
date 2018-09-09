@@ -162,31 +162,30 @@ syscalls = [
 ########
 # user #
 ########
-  'setuid', 'setuid32', # set user identity
+  '-setuid', '-setuid32', # set user identity
   'getuid', 'getuid32', # get real user ID
-  'setgid', 'setgid32', # set group identity
+  '-setgid', '-setgid32', # set group identity
   'getgid', 'getgid32', # get real group ID 
-  'setreuid', 'setreuid32', # set real and/or effective user ID
+  '-setreuid', '-setreuid32', # set real and/or effective user ID
   'geteuid', 'geteuid32', # get effective user ID 
-  'setregid', 'setregid32', # set real and/or effective group ID
+  '-setregid', '-setregid32', # set real and/or effective group ID
   'getegid', 'getegid32', # get effective group ID
-  'setresuid', 'setresuid32', # set real, effective and saved group IDs
+  '-setresuid', '-setresuid32', # set real, effective and saved group IDs
   'getresuid', 'getresuid32', # get real, effective and saved group IDs
-  'setresgid', 'setresgid32', # set real, effective and saved group IDs
+  '-setresgid', '-setresgid32', # set real, effective and saved group IDs
   'getresgid', 'getresgid32', # get real, effective and saved group IDs
-  'setfsuid', 'setfsuid32', # set user identity used for filesystem checks
-  'setfsgid', 'setfsgid32', # set group identity used for filesystem checks
+  '-setfsuid', '-setfsuid32', # set user identity used for filesystem checks
+  '-setfsgid', '-setfsgid32', # set group identity used for filesystem checks
 ########
 # time #
 ########
   '-settimeofday', 'gettimeofday', # set/get time of day
-  '-clock_settime', # set the time of the specified clock
-  '-clock_gettime', # set the time of the specified clock
+  '-clock_settime', 'clock_gettime', # set/get the time of the specified clock
   'clock_getres', # finds the resolution (precision) of the specified clock
   'clock_nanosleep', # high resolution sleep
   '-clock_adjtime', # correct the time to synchronize the system clock
   'nanosleep', # high-resolution sleep
-  'adjtimex', # tune kernel clock
+  '-adjtimex', # tune kernel clock
 ##########
 # system #
 ##########
