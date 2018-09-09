@@ -8,6 +8,9 @@ blacklist = [
   '_sysctl', # read/write system parameters
   'fchown', # change owner and group of a file
   'fchownat', # change owner and group of a file relative to directory file descriptor
+  'quotactl', # manipulate disk quotas
+  'settimeofday', # set time of day
+  'sethostname', # set hostname
 # exotic syscals
   '_llseek', # reposition read/write file offset for lage files on 32-bit platforms
   'set_tid_address', # set pointer to thread ID
@@ -44,6 +47,7 @@ whitelist = [
   'unlink', 'unlinkat', # delete a name and possibly the file it refers to
   'symlink', 'symlinkat', # make a symbolic link relative to directory file descriptor
   'dup', 'dup2', # duplicate an open file descriptor
+  #'quotactl', # manipulate disk quotas
 #################
 # file contents #
 #################
@@ -77,22 +81,30 @@ whitelist = [
   'getdents', 'getdents64', # get directory entries
   'mkdir', 'mkdirat', # create a directory
   'rmdir', # delete a directory
+  'getcwd', # get current working directory
 ###########
 # sockets #
 ###########
   'socket', # create an endpoint for communication
   'socketpair', # create a pair of connected sockets
+  'bind', # bind a name to a socket
   'connect', # set and get signal alternate stack context
   'accept', 'accept4', # accept a connection on a socket
   'sendto', # send a message on a socket
   'sendmsg', # send a message on a socket using a message structure
+  'sendmmsg', # send multiple message on a socket
   'recvmsg', # receive a message from a socket
   #'socketcall', # socket system calls
+  'setsockopt', 'getsockopt', # set/get the socket options
+  'getsockname', # get the socket name
 #############
 # processes #
 #############
   'getpid', # get process identification
+  'setsid', # creates a session and sets the process group ID
+  'getpgid', # get the process group ID for a process
   'gettid', # get thread identification
+  'capset', 'capget', # set/get capabilities of thread(s)
   #'set_tid_address', # set pointer to thread ID
   'prctl', # operations on a process
   'arch_prctl', # set architecture-specific thread state
@@ -155,17 +167,39 @@ whitelist = [
 ########
 # user #
 ########
-  'getuid', 'geteuid', # get a real and effective user ID 
+  'setuid', 'setuid32', # set user identity
+  'getuid', 'getuid32', # get real user ID
+  'setgid', 'setgid32', # set group identity
+  'getgid', 'getgid32', # get real group ID 
+  'setreuid', 'setreuid32', # set real and/or effective user ID
+  'geteuid', 'geteuid32', # get effective user ID 
+  'setregid', 'setregid32', # set real and/or effective group ID
+  'getegid', 'getegid32' # get effective group ID
+  'setresuid', 'setresuid32', # set real, effective and saved group IDs
+  'getresuid', 'getresuid32', # get real, effective and saved group IDs
+  'setresgid', 'setresgid32', # set real, effective and saved group IDs
+  'getresgid', 'getresgid32', # get real, effective and saved group IDs
+  'setfsuid', 'setfsuid32', # set user identity used for filesystem checks
+  'setfsgid', 'setfsgid32', # set group identity used for filesystem checks
 ##########
-# others #
+# system #
 ##########
+  #'settimeofday', # set time of day
+  'gettimeofday', # get time of day
+  #'sethostname', # set hostname
+  'gethostname', # get hostname
   #'_sysctl', # read/write system parameters
   #'olduname', 'oldolduname', # get name and information about current kerne
   'uname', # get name and information about current kernel
+  'seccomp', # operate on Secure Computing state of the process
+  'sysinfo', # return system information
+  'getrusage', # get information about resource utilization
+  'setrlimit', 'getrlimit', 'ugetrlimit', 'prlimit64', # set/get resource limits
+##########
+# others #
+##########
   'getrandom', # obtain a series of random bytes
   'ipc', # System V IPC system calls
-  'seccomp', # operate on Secure Computing state of the process
-  'getrusage', # get information about resource utilization
 ]
 specials = {
    # needed by strace -qcf ?
