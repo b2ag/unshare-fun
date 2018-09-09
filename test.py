@@ -12,24 +12,28 @@ syscalls = [
   'close', # close a file descriptor
   'access', 'faccessat', # determine accessibility of a file relative to directory file descriptor
   'statx', # get file status (extended)
-  '!oldstat', '!oldfstat', '!oldlstat', # get file status
   'stat', 'stat64', 'fstat', 'fstat64', 'fstatat64', 'newfstatat', 'lstat', 'lstat64', # get file status
   'statfs', 'statfs64', 'fstatfs', 'fstatfs64', # get filesystem statistics
   'ustat', # get filesystem statistics
   'flock', # apply or remove an advisory lock on an open file
-  '!chmod', '!fchmod', '!fchmodat', # change permissions of a file
-  '!chown', '!chown32', '!fchown', '!fchown32', '!fchownat', '!lchown', '!lchown32', # change ownership of a file
+  '-chmod', '-fchmod', '-fchmodat', # change permissions of a file
+  '-chown', '-chown32', '-fchown', '-fchown32', '-fchownat', '-lchown', '-lchown32', # change ownership of a file
   'fcntl', # file control
   'fsync', # synchronize changes to a file
   'readlink', 'readlinkat', # read value of a symbolic link
   'rename', 'renameat', 'renameat2', # change the name or location of a file
   'unlink', 'unlinkat', # delete a name and possibly the file it refers to
   'symlink', 'symlinkat', # make a symbolic link relative to directory file descriptor
-  'dup', 'dup2', # duplicate an open file descriptor
-  '!quotactl', # manipulate disk quotas
+  'dup', 'dup2', 'dup3', # duplicate an open file descriptor
+  '-quotactl', # manipulate disk quotas
   'umask', # set file mode creation mask
-  '!mount', '!umount', '!umount2', # mount and umount filesystem
+  '-mount', '-umount', '-umount2', # mount and umount filesystem
   'memfd_create', # create an anonymous file
+###########
+# inotify #
+###########
+  'inotify_init', 'inotify_init1', # initialize an inotify instance
+  'inotify_add_watch', 'inotify_rm_watch', # add/remove a watch on an initialized inotify instance
 #################
 # file contents #
 #################
@@ -40,11 +44,11 @@ syscalls = [
   'readv', 'preadv', 'preadv2', # read data from multiple buffers
   'writev', 'pwritev', 'pwritev2', # write data into multiple buffers
   'lseek', #  move the read/write file offset
-  '!_llseek', # reposition read/write file offset for lage files on 32-bit platforms
   'fallocate', # preallocate or deallocate space to a file
   'fadvise64', 'fadvise64_64', # predeclare an access pattern for file data
   'readahead', # initiate file readahead into page cache
   'ftruncate', 'ftruncate64', # truncate a file to a specified length
+  'fdatasync', # synchronize the data of a file (REALTIME)
 ###########
 # devices #
 ###########
@@ -79,7 +83,6 @@ syscalls = [
   'sendmmsg', # send multiple message on a socket
   'recvmsg', # receive a message from a socket
   'recvfrom', # receive a message from a socket
-  '!socketcall', # socket system calls
   'setsockopt', 'getsockopt', # set/get the socket options
   'getsockname', # get the socket name
   'getpeername', # get the name of the peer socket
@@ -93,10 +96,10 @@ syscalls = [
   'getpgrp', # get the process group ID
   'gettid', # get thread identification
   'capset', 'capget', # set/get capabilities of thread(s)
-  '!set_tid_address', # set pointer to thread ID
+  'set_tid_address', # set pointer to thread ID
   'prctl', # operations on a process
   'arch_prctl', # set architecture-specific thread state
-  '!fork', # create a child process (replaced by clone with SIGCHLD)
+  '-fork', # create a child process (replaced by clone with SIGCHLD)
   'clone', # create a child process
   'execve', # execute a program
   'execveat', # execute program relative to a directory file descriptor
@@ -113,10 +116,8 @@ syscalls = [
   'futex', # fast user-space locking
   'set_robust_list', 'get_robust_list', # set/get list of robust futexes
   'poll', 'ppoll', # wait for some event on a file descriptor
-  '!oldwait4', # wait for process to change state, BSD style
   'wait4', # wait for process to change state, BSD style
   'epoll_create', 'epoll_create1', # open an epoll file descriptor
-  '!epoll_ctl_old', # control interface for an epoll file descriptor
   'epoll_ctl', # control interface for an epoll file descriptor
   'epoll_wait', 'epoll_pwait', # wait for an I/O event on an epoll file descriptor
   'eventfd', 'eventfd2', # create a file descriptor for event notification
@@ -147,7 +148,7 @@ syscalls = [
 ##########
 # memory #
 ##########
-  '!brk', # change data segment size
+  '-brk', # change data segment size
   'madvise', # give advice about use of memory
   'mmap', 'mmap2', 'munmap', # map files or devices into memory
   'mprotect', # set protection of memory mapping
@@ -178,51 +179,92 @@ syscalls = [
 ########
 # time #
 ########
-  '!settimeofday', 'gettimeofday', # set/get time of day
-  '!clock_settime', # set the time of the specified clock
-  '!clock_gettime', # set the time of the specified clock
+  '-settimeofday', 'gettimeofday', # set/get time of day
+  '-clock_settime', # set the time of the specified clock
+  '-clock_gettime', # set the time of the specified clock
   'clock_getres', # finds the resolution (precision) of the specified clock
   'clock_nanosleep', # high resolution sleep
-  '!clock_adjtime', # correct the time to synchronize the system clock
+  '-clock_adjtime', # correct the time to synchronize the system clock
+  'nanosleep', # high-resolution sleep
+  'adjtimex', # tune kernel clock
 ##########
 # system #
 ##########
-  '!sethostname', # set hostname
-  '!_sysctl', # read/write system parameters
-  '!olduname', '!oldolduname', # get name and information about current kerne
+  '-sethostname', # set hostname
+  '-_sysctl', # read/write system parameters
   'uname', # get name and information about current kernel
   'seccomp', # operate on Secure Computing state of the process
   'sysinfo', # return system information
   'getrusage', # get information about resource utilization
   'setrlimit', 'getrlimit', 'ugetrlimit', 'prlimit64', # set/get resource limits
   '!reboot', # reboot or enable/disable Ctrl-Alt-Del
+  '!create_module', # create a loadable module entry
+  '!init_module', '!finit_module', # load a kernel module
+  '!delete_module', # unload a kernel module
+  '!kexec_load', '!kexec_file_load', # load a new kernel for later execution
+##################
+# key management #
+##################
+  'add_key', # add a key to the kernel's key management facility
+#############
+# profiling #
+#############
+  '-acct', # switch process accounting on or off
 ##########
 # others #
 ##########
   'getrandom', # obtain a series of random bytes
   'ipc', # System V IPC system calls
-  '!restart_syscall', # restart a system call after interruption by a stop signal
+  '-restart_syscall', # restart a system call after interruption by a stop signal
+  '!arm_fadvise64_64', '!arm_sync_file_range', # wrong architecture
+  '-bpf', # perform a command on an extended BPF map or program
+###############################
+# deprecated or unimplemented #
+###############################
+  '!afs_syscall', '!break', '!ftime', '!getpmsg', '!gtty', '!lock', '!mpx', '!prof', '!profil', '!putpmsg', '!security', '!stty', '!tuxcall', '!ulimit', '!vserver',
+  '-bdflush', # start, flush, or tune buffer-dirty-flush daemon
+  '-oldstat', '-oldfstat', '-oldlstat', # get file status
+  '-olduname', '-oldolduname', # get name and information about current kernel
+  '-epoll_ctl_old', # control interface for an epoll file descriptor
+  '-oldwait4', # wait for process to change state, BSD style
+  '-socketcall', # socket system calls
+  '-_llseek', # reposition read/write file offset for lage files on 32-bit platforms
 ]
 
-unimplemented = [ 'afs_syscall', 'break', 'ftime', 'getpmsg', 'gtty', 'lock', 'mpx', 'prof', 'profil', 'putpmsg', 'security', 'stty', 'tuxcall', 'ulimit', 'vserver' ]
 
 specials = {
    # needed by strace -qcf ?
   #'restart_syscall': libseccomp.seccomp.LOG,
 }
 
-blacklist = []
+
 whitelist = []
+blacklist = {}
 for syscall in syscalls:
-  if syscall.startswith('!'):
-    blacklist.append(syscall[1:])
+  if syscall.startswith('-'):
+    blacklist[syscall[1:]] = libseccomp.seccomp.ERRNO(126)
+  elif syscall.startswith('!'):
+    blacklist[syscall[1:]] = libseccomp.seccomp.KILL
   else:
     whitelist.append(syscall)
 
-f = libseccomp.seccomp.SyscallFilter(defaction=libseccomp.seccomp.LOG)
+known_syscalls = list(blacklist) + whitelist 
+import all_syscalls
+for syscall in all_syscalls.all_syscalls:
+    if syscall not in known_syscalls:
+        print("missing syscall: {}".format(syscall))
+
 for syscall in blacklist:
+    print("blacklisted syscall: {}".format(syscall))
+
+
+# init seccomp filter
+f = libseccomp.seccomp.SyscallFilter(defaction=libseccomp.seccomp.LOG)
+
+# add blacklist rules
+for syscall, action in blacklist.items():
   try:
-    f.add_rule( libseccomp.seccomp.ERRNO(126), syscall )
+    f.add_rule( action, syscall )
   except RuntimeError as e:
     print('Blacklist error on syscall "{}"'.format(syscall))
     print(e)
@@ -231,12 +273,6 @@ for syscall in whitelist:
     f.add_rule( libseccomp.seccomp.ALLOW, syscall )
   except RuntimeError as e:
     print('Whitelist error on syscall "{}"'.format(syscall))
-    print(e)
-for syscall in unimplemented:
-  try:
-    f.add_rule( libseccomp.seccomp.KILL, syscall )
-  except RuntimeError as e:
-    print('Unimplemented list error on syscall "{}"'.format(syscall))
     print(e)
 for syscall, action in specials.items():
   try:
@@ -249,7 +285,8 @@ for syscall, action in specials.items():
 f.load()
 
 # start shell
-print('Blacklisted:{} Unimplemented:{} Whitelisted:{}'.format(len(blacklist),len(unimplemented),len(whitelist)))
+print('Blacklisted:{} Whitelisted:{}'.format(len(blacklist),len(whitelist)))
 print("ENTER")
+os.environ['R']='in the matrix'
 os.system('zsh')
 print("EXIT")
