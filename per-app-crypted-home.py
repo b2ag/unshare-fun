@@ -22,7 +22,7 @@ Options:
   -q, --quiet                     Suppress extra output
   -r, --resize=SIZE               Resize an existing container
   -s, --size=SIZE                 Maximum size of container [default: 4G]
-  --seccomp                       Enable extra sandbox with seccomp
+  --seccomp                       Sandbox syscalls with seccomp
   --skip-dbus-launch              Skip DBUS launch inside container
   --skip-devices                  Skip restricting devices access inside container
   --skip-hide-run                 Skip mount new tmpfs to /run
