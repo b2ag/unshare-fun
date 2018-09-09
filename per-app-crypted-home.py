@@ -696,11 +696,27 @@ def main():
         f = libseccomp.seccomp.SyscallFilter(defaction=libseccomp.seccomp.LOG)
         for syscall in config['seccomp_syscalls']:
           if syscall.startswith('-'):
-            f.add_rule( libseccomp.seccomp.ERRNO(126), syscall[1:] )
+            try:
+              f.add_rule( libseccomp.seccomp.ERRNO(126), syscall[1:] )
+            except RuntimeError as e:
+              logging.warning('Could not add "{}" funny error rule: {}'.format(syscall[1:],e))
           elif syscall.startswith('!'):
-            f.add_rule( libseccomp.seccomp.KILL, syscall[1:] )
+            try:
+              f.add_rule( libseccomp.seccomp.KILL, syscall[1:] )
+            except RuntimeError as e:
+              logging.warning('Could not add "{}" kill rule: {}'.format(syscall[1:],e))
+          elif syscall.startswith('?'):
+            try:
+              # log is default, so pass
+              pass
+              #f.add_rule( libseccomp.seccomp.LOG, syscall[1:] )
+            except RuntimeError as e:
+              logging.warning('Could not add "{}" logging rule: {}'.format(syscall[1:],e))
           else:
-            f.add_rule( libseccomp.seccomp.ALLOW, syscall )
+            try:
+              f.add_rule( libseccomp.seccomp.ALLOW, syscall )
+            except RuntimeError as e:
+              logging.warning('Could not add "{}" allow rule: {}'.format(syscall[1:],e))
         f.load()
       #libc.prctl( PR_SET_SECCOMP, SECCOMP_MODE_STRICT, 0, 0, 0 )
 
@@ -762,7 +778,7 @@ syscalls = [
   'statfs', 'statfs64', 'fstatfs', 'fstatfs64', # get filesystem statistics
   'ustat', # get filesystem statistics
   'flock', # apply or remove an advisory lock on an open file
-  '-chmod', '-fchmod', '-fchmodat', # change permissions of a file
+  'chmod', 'fchmod', 'fchmodat', # change permissions of a file
   '-chown', '-chown32', '-fchown', '-fchown32', '-fchownat', '-lchown', '-lchown32', # change ownership of a file
   'fcntl', 'fcntl64', # file control
   'fsync', # synchronize changes to a file
@@ -782,9 +798,9 @@ syscalls = [
 #######################
 # extended attributes #
 #######################
-  '-statx', # get file status (extended)
-  '-getxattr', '-lgetxattr', '-fgetxattr', # retrieve an extended attribute value
-  '-listxattr', '-llistxattr', '-flistxattr', # list extended attribute names
+  'statx', # get file status (extended)
+  'getxattr', 'lgetxattr', 'fgetxattr', # retrieve an extended attribute value
+  'listxattr', 'llistxattr', 'flistxattr', # list extended attribute names
   '-removexattr', '-lremovexattr', '-fremovexattr', # remove an extended attribute
   '-setxattr', '-lsetxattr', '-fsetxattr', # set an extended attribute value
 ##########
