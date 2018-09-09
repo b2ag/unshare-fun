@@ -693,7 +693,7 @@ def main():
       change_user()
       if config['use_seccomp']:
         import libseccomp.seccomp
-        f = libseccomp.seccomp.SyscallFilter(defaction=libseccomp.seccomp.LOG)
+        f = libseccomp.seccomp.SyscallFilter(defaction=libseccomp.seccomp.KILL)
         for syscall in config['seccomp_syscalls']:
           if syscall.startswith('-'):
             try:
@@ -702,14 +702,14 @@ def main():
               logging.warning('Could not add "{}" funny error rule: {}'.format(syscall[1:],e))
           elif syscall.startswith('!'):
             try:
-              f.add_rule( libseccomp.seccomp.KILL, syscall[1:] )
+              # kill is default, so pass
+              pass
+              #f.add_rule( libseccomp.seccomp.KILL, syscall[1:] )
             except RuntimeError as e:
               logging.warning('Could not add "{}" kill rule: {}'.format(syscall[1:],e))
           elif syscall.startswith('?'):
             try:
-              # log is default, so pass
-              pass
-              #f.add_rule( libseccomp.seccomp.LOG, syscall[1:] )
+              f.add_rule( libseccomp.seccomp.LOG, syscall[1:] )
             except RuntimeError as e:
               logging.warning('Could not add "{}" logging rule: {}'.format(syscall[1:],e))
           else:
