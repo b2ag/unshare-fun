@@ -111,10 +111,6 @@ def die( msg ):
 def parse_arguments():
   arguments = docopt.docopt( __doc__.replace('$0',os.path.basename(sys.argv[0])), options_first=True, version='{} 0.2'.format(os.path.basename(sys.argv[0])))
   config = {}
-  config['quiet'] = False
-  if arguments['--quiet']:
-    logging.getLogger().setLevel( logging.ERROR )
-    config['quiet'] = True
   # defaults
   config['unshare_flags'] = [ 'CLONE_NEWNS', 'CLONE_NEWPID', 'CLONE_NEWUTS', 'CLONE_NEWIPC', 'CLONE_NEWNET', 'CLONE_NEWCGROUP' ]
   config['container'] = '$HOME/.crypted-homes/$APPLICATION_ID'
@@ -123,6 +119,7 @@ def parse_arguments():
   config['app_id'] = '$BASENAME-$PATHHASH'
   config['size'] = '4G'
   config['teardown_timeout'] = 10
+  config['quiet'] = False
   config['seccomp_syscalls'] = syscalls
   # read config
   if arguments['--config']:
@@ -133,6 +130,9 @@ def parse_arguments():
       for key, value in config_file_contents:
         if value: config[key] = json.loads(value)
   # arguments override
+  if arguments['--quiet'] or config['quiet']:
+    logging.getLogger().setLevel( logging.ERROR )
+    config['quiet'] = True
   if arguments['--fs-type']: config['fs_type'] = arguments['--fs-type'].lower()
   if arguments['--hash']: config['hashtool'] = arguments['--hash']
   if arguments['--id']: config['app_id'] = arguments['--id']
@@ -692,33 +692,35 @@ def main():
     def application_preexec():
       change_user()
       if config['use_seccomp']:
-        import libseccomp.seccomp
-        f = libseccomp.seccomp.SyscallFilter(defaction=libseccomp.seccomp.KILL)
-        for syscall in config['seccomp_syscalls']:
-          if syscall.startswith('-'):
-            try:
-              f.add_rule( libseccomp.seccomp.ERRNO(126), syscall[1:] )
-            except RuntimeError as e:
-              logging.warning('Could not add "{}" funny error rule: {}'.format(syscall[1:],e))
-          elif syscall.startswith('!'):
-            try:
-              # kill is default, so pass
-              pass
-              #f.add_rule( libseccomp.seccomp.KILL, syscall[1:] )
-            except RuntimeError as e:
-              logging.warning('Could not add "{}" kill rule: {}'.format(syscall[1:],e))
-          elif syscall.startswith('?'):
-            try:
-              f.add_rule( libseccomp.seccomp.LOG, syscall[1:] )
-            except RuntimeError as e:
-              logging.warning('Could not add "{}" logging rule: {}'.format(syscall[1:],e))
-          else:
-            try:
-              f.add_rule( libseccomp.seccomp.ALLOW, syscall )
-            except RuntimeError as e:
-              logging.warning('Could not add "{}" allow rule: {}'.format(syscall[1:],e))
-        f.load()
-      #libc.prctl( PR_SET_SECCOMP, SECCOMP_MODE_STRICT, 0, 0, 0 )
+        try:
+          import libseccomp.seccomp
+          f = libseccomp.seccomp.SyscallFilter(defaction=libseccomp.seccomp.KILL)
+          for syscall in config['seccomp_syscalls']:
+            if syscall.startswith('-'):
+              try:
+                f.add_rule( libseccomp.seccomp.ERRNO(126), syscall[1:] )
+              except RuntimeError as e:
+                logging.warning('Could not add "{}" funny error rule: {}'.format(syscall[1:],e))
+            elif syscall.startswith('!'):
+              try:
+                # kill is default, so pass
+                pass
+                #f.add_rule( libseccomp.seccomp.KILL, syscall[1:] )
+              except RuntimeError as e:
+                logging.warning('Could not add "{}" kill rule: {}'.format(syscall[1:],e))
+            elif syscall.startswith('?'):
+              try:
+                f.add_rule( libseccomp.seccomp.LOG, syscall[1:] )
+              except RuntimeError as e:
+                logging.warning('Could not add "{}" logging rule: {}'.format(syscall[1:],e))
+            else:
+              try:
+                f.add_rule( libseccomp.seccomp.ALLOW, syscall )
+              except RuntimeError as e:
+                logging.warning('Could not add "{}" allow rule: {}'.format(syscall[1:],e))
+          f.load()
+        except:
+          logging.error("Could not load seccomp rules. python-libsecomp missing?")
 
     # launch dbus
     if config['do_launch_dbus']:
