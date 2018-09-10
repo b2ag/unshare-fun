@@ -22,8 +22,8 @@ Options:
   -n, --nat                       Setup NAT for internet access
   -q, --quiet                     Suppress extra output
   -r, --resize=SIZE               Resize an existing container
-  -s, --size=SIZE                 Maximum size of container (default: 4G)
   --seccomp                       Sandbox syscalls with seccomp
+  -s, --size=SIZE                 Maximum size of container (default: 4G)
   --skip-dbus-launch              Skip DBUS launch inside container
   --skip-devices                  Skip restricting devices access inside container
   --skip-hide-run                 Skip mount new tmpfs to /run
@@ -137,39 +137,43 @@ def parse_arguments():
   if arguments['--hash']: config['hashtool'] = arguments['--hash']
   if arguments['--id']: config['app_id'] = arguments['--id']
   if arguments['--teardown-timeout']: config['teardown_timeout'] = int(arguments['--teardown-timeout'])
-  if arguments['--key-file'] or 'key_file' not in config: config['key_file'] = arguments['--key-file']
-  if arguments['--nat'] or 'do_nat' not in config: config['do_nat'] = arguments['--nat']
-  if arguments['--xauth'] or 'configure_xauth' not in config: config['configure_xauth'] = arguments['--xauth']
-  if arguments['--skip-xdg-runtime-dir'] or 'xdg_runtime_dir' not in config: config['xdg_runtime_dir'] = '/run/user/$UID' if not arguments['--skip-xdg-runtime-dir'] else False
-  if arguments['--mac-address'] or 'mac_address' not in config: config['mac_address'] = arguments['--mac-address']
-  if arguments['-b'] or 'bind_dirs' not in config: config['bind_dirs'] = arguments['-b']
-  if arguments['--tcpdump'] or 'do_tcpdump' not in config: config['do_tcpdump'] = arguments['--tcpdump']
-  if arguments['--seccomp'] or 'use_seccomp' not in config: config['use_seccomp'] = arguments['--seccomp']
-  if arguments['--skip-dbus-launch'] or 'do_launch_dbus' not in config: config['do_launch_dbus'] = not arguments['--skip-dbus-launch']
-  if arguments['--cpu-quota'] or 'cpu_quota' not in config: config['cpu_quota'] = arguments['--cpu-quota']
-  if config['cpu_quota']:
-    config['cpu_quota'] = float(config['cpu_quota'])
-  if arguments['--skip-devices'] or 'restrict_devices' not in config: config['restrict_devices'] = not arguments['--skip-devices']
-  if arguments['--max-memory'] or 'max_memory' not in config: config['max_memory'] = arguments['--max-memory']
-  if config['max_memory']:
-    config['max_memory'] = config['max_memory'].upper()
-    if not human2bytes(config['max_memory']):
-      die("Can't parse memory limit option \"{}\"".format(config['max_memory']))
+  def argument2config( argument_key, config_key, mod='' ):
+    if arguments[argument_key] or config_key not in config:
+      if mod == '': config[config_key] = arguments[argument_key]
+      elif mod == 'not': config[config_key] = not arguments[argument_key]
+  argument2config( '-b', 'bind_dirs' )
+  argument2config( '--container', 'container' )
+  argument2config( '--cpu-quota', 'cpu_quota' )
+  argument2config( '--key-file', 'key_file' )
+  argument2config( '--mac-address', 'mac_address' )
+  argument2config( '--max-memory', 'max_memory' )
+  argument2config( '--nat', 'do_nat' )
+  argument2config( '--seccomp', 'use_seccomp' )
+  argument2config( '--size', 'size' )
+  argument2config( '--skip-dbus-launch', 'do_launch_dbus', 'not' )
+  argument2config( '--skip-devices', 'restrict_devices', 'not' )
+  argument2config( '--skip-bind-x11-unix', 'do_bind_.X11-unix', 'not' )
+  argument2config( '--skip-hide-run', 'hide_run', 'not' )
+  argument2config( '--skip-hide-tmp', 'hide_tmp', 'not' )
   if arguments['--skip-ipc']:
     config['unshare_flags'].remove('CLONE_NEWIPC')
   if arguments['--skip-network']:
     config['unshare_flags'].remove('CLONE_NEWNET')
   if arguments['--skip-uts']:
     config['unshare_flags'].remove('CLONE_NEWUTS')
-  if arguments['--size']: config['size'] = arguments['--size'].upper()
+  if arguments['--skip-xdg-runtime-dir'] or 'xdg_runtime_dir' not in config: config['xdg_runtime_dir'] = '/run/user/$UID' if not arguments['--skip-xdg-runtime-dir'] else False
+  argument2config( '--tcpdump', 'do_tcpdump' )
+  argument2config( '--xauth', 'configure_xauth' )
+  if config['cpu_quota']: config['cpu_quota'] = float(config['cpu_quota'])
+  if config['size']: config['size'] = config['size'].upper()
+  if config['max_memory']:
+    config['max_memory'] = config['max_memory'].upper()
+    if not human2bytes(config['max_memory']):
+      die("Can't parse memory limit option \"{}\"".format(config['max_memory']))
   if not human2bytes(config['size']):
     die("Can't parse size argument \"{}\"".format(config['size']))
   if 'xauth_key' not in config: config['xauth_key'] = binascii.hexlify(os.urandom(16)).decode()
-  if arguments['--skip-hide-tmp'] or 'hide_tmp' not in config: config['hide_tmp'] = not arguments['--skip-hide-tmp']
-  if arguments['--skip-hide-run'] or 'hide_run' not in config: config['hide_run'] = not arguments['--skip-hide-run']
-  if arguments['--skip-bind-x11-unix'] or 'do_bind_.X11-unix' not in config: config['do_bind_.X11-unix'] = not arguments['--skip-bind-x11-unix']
   if arguments['--display'] or 'display' not in config: config['display'] = arguments['--display'] if arguments['--display'] else os.getenv('DISPLAY')
-  if arguments['--container'] or 'container' not in config: config['container'] = arguments['--container']
   # save config
   if arguments['--write-config']:
     if not arguments['--config']: die('Please specify a config file with "--config" for argument "--write-config" to work')
