@@ -127,7 +127,7 @@ def parse_arguments():
   # read config
   if arguments['--config']:
     config_parser = configparser.ConfigParser()
-    if os.path.exists(arguments['--config']):
+    if not arguments['--write-config'] and os.path.exists(arguments['--config']):
       config_parser.read_file(open(arguments['--config']))
       config_file_contents = config_parser.items(configparser.DEFAULTSECT)
       for key, value in config_file_contents:
@@ -171,14 +171,14 @@ def parse_arguments():
   if arguments['--display'] or 'display' not in config: config['display'] = arguments['--display'] if arguments['--display'] else os.getenv('DISPLAY')
   if arguments['--container'] or 'container' not in config: config['container'] = arguments['--container']
   # save config
-  if arguments['--config']:
-    if arguments['--write-config']:
-      for key, value in config.items():
-        config_parser.set( configparser.DEFAULTSECT, key, json.dumps(value) )
-      with open(arguments['--config'], 'w') as configfile:
-        config_parser.write(configfile)
-      logging.info('Successfully writen config "{}"'.format(arguments['--config']))
-      sys.exit(0)
+  if arguments['--write-config']:
+    if not arguments['--config']: die('Please specify a config file with "--config" for argument "--write-config" to work')
+    for key, value in config.items():
+      config_parser.set( configparser.DEFAULTSECT, key, json.dumps(value) )
+    with open(arguments['--config'], 'w') as configfile:
+      config_parser.write(configfile)
+    logging.info('Successfully writen config "{}"'.format(arguments['--config']))
+    sys.exit(0)
   # config override
   config['resize'] = arguments['--resize']
   if config['resize']:
