@@ -137,9 +137,9 @@ def parse_arguments():
   if arguments['--hash']: config['hashtool'] = arguments['--hash']
   if arguments['--id']: config['app_id'] = arguments['--id']
   if arguments['--teardown-timeout']: config['teardown_timeout'] = int(arguments['--teardown-timeout'])
-  if arguments['--key-file' or 'key_file' not in config]: config['key_file'] = arguments['--key-file']
-  if arguments['--nat' or 'do_nat' not in config]: config['do_nat'] = arguments['--nat']
-  if arguments['--xauth' or 'configure_xauth' not in config]: config['configure_xauth'] = arguments['--xauth']
+  if arguments['--key-file'] or 'key_file' not in config: config['key_file'] = arguments['--key-file']
+  if arguments['--nat'] or 'do_nat' not in config: config['do_nat'] = arguments['--nat']
+  if arguments['--xauth'] or 'configure_xauth' not in config: config['configure_xauth'] = arguments['--xauth']
   if arguments['--skip-xdg-runtime-dir'] or 'xdg_runtime_dir' not in config: config['xdg_runtime_dir'] = '/run/user/$UID' if not arguments['--skip-xdg-runtime-dir'] else False
   if arguments['--mac-address'] or 'mac_address' not in config: config['mac_address'] = arguments['--mac-address']
   if arguments['-b'] or 'bind_dirs' not in config: config['bind_dirs'] = arguments['-b']
