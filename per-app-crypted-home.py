@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 """
 Usage: 
   $0 [options] [-b<DIR>]... [--] <application> [<arguments>...]
@@ -253,14 +253,15 @@ def try_close_container( config ):
   # let the parent close the container
   if not config['parent']: return
   deadline = datetime.datetime.utcnow() + datetime.timedelta(seconds=config['teardown_timeout'])
-  while subprocess.run(['cryptsetup','status',config['app_id']],stdout=subprocess.DEVNULL).returncode is 0:
-    if subprocess.run(['cryptsetup','close',config['app_id']]).returncode is 0:
+  while subprocess.call(['cryptsetup','status',config['app_id']],stdout=subprocess.DEVNULL) is 0:
+    time.sleep(1)
+    if subprocess.call(['cryptsetup','close',config['app_id']]) is 0:
       logging.info("Successfully closed container")
     else:
       logging.warning("Couldn't close container. Retrying")
     if datetime.datetime.utcnow() >= deadline:
       return False
-    time.sleep(2)
+    time.sleep(1)
   return True
 
 def create_empty_container( config ):
@@ -277,7 +278,7 @@ def luks_format_container( config ):
   cmd = [ 'cryptsetup', 'luksFormat', config['container'], '--type', 'luks2', '--batch-mode' ]
   if config['key_file']: cmd+= [ '--key-file', config['key_file'] ]
   else: cmd+= [ '--verify-passphrase' ]
-  returncode = subprocess.run(cmd).returncode
+  returncode = subprocess.call(cmd)
   if returncode is 0:
     logging.info('Successfully LUKS formated container')
   else:
@@ -289,9 +290,9 @@ def luks_open_container( config ):
   file_output = subprocess.check_output(['file',config['container']])
   if file_output.find(b'LUKS encrypted file') == -1:
     die("Container missing a LUKS header. Refusing to open it.")
-  cmd = [ 'cryptsetup', 'open', config['container'], config['app_id'], '--type', 'luks2' ]
+  cmd = [ 'cryptsetup', 'open', config['container'], config['app_id'] ]
   if config['key_file']: cmd+= [ '--key-file', config['key_file'] ]
-  returncode = subprocess.run(cmd).returncode
+  returncode = subprocess.call(cmd)
   if returncode is 0:
     logging.info('Successfully opened container')
     atexit.register( try_close_container, config )
@@ -303,7 +304,7 @@ def mkfs_open_container( config ):
   logging.warning( "Warning: Random data caused by reading freshly created crypted container may irritate mkfs" )
   if config['quiet']: outfd=subprocess.DEVNULL
   else: outfd=sys.stdout
-  returncode = subprocess.run([ config['mkfs'], config['open_container'] ], stdout=outfd, stderr=outfd).returncode
+  returncode = subprocess.call([ config['mkfs'], config['open_container'] ], stdout=outfd, stderr=outfd)
   if returncode is 0:
     logging.info('Successfully created filesystem')
   else:
@@ -315,7 +316,7 @@ def fsck_open_container( config, force=False ):
   else: outfd=subprocess.DEVNULL
   cmd=[ config['fsck'], '-y' ]
   if force: cmd+=['-f']
-  returncode = subprocess.run( cmd+[config['open_container']], stdout=outfd, stderr=outfd).returncode
+  returncode = subprocess.call( cmd+[config['open_container']], stdout=outfd, stderr=outfd)
   if returncode is 0:
     logging.info('Filesystem is clean')
   else:
@@ -380,8 +381,8 @@ def main():
       header_offset=current_size - int(subprocess.check_output(['blockdev','--getsize64',config['open_container']]))
       new_size='{}s'.format(int((human2bytes(config['resize'])-header_offset)/512))
       logging.info("Resizing filesystem")
-      resize2fs = subprocess.run(['resize2fs',config['open_container'],new_size])
-      if resize2fs.returncode is not 0:
+      resize2fs_returncode = subprocess.call(['resize2fs',config['open_container'],new_size])
+      if resize2fs_returncode is not 0:
         die("Resizing filesystem failed")
     fsck_open_container( config )
     if config['resize'] and config['resize_mode'] is 'shrink':
@@ -403,7 +404,7 @@ def main():
         config['xauth_file'] = match.group(1).decode()
         logging.info('Xauth adding "{net_name}/unix:0" to host auth file "{xauth_file}"'.format(**config))
         if os.path.exists(config['xauth_file']):
-          subprocess.run(['xauth','-f',config['xauth_file'],'add','{net_name}/unix:0'.format(**config),'.',config['xauth_key']])
+          subprocess.call(['xauth','-f',config['xauth_file'],'add','{net_name}/unix:0'.format(**config),'.',config['xauth_key']])
     elif config['display'] and config['display'].startswith(':'):
       # extract existing xauth cookie
       config['xauth_cookie'] = subproccess.check_output(['xauth','extract','-','{}/unix{}'.format(os.uname().nodename,config['display'])])
@@ -419,7 +420,7 @@ def main():
     def revert_xauth_changes():
       if os.path.exists(config['xauth_file']):
         logging.info('Xauth removing "{net_name}/unix:0" from "{xauth_file}"'.format(**config))
-        subprocess.run(['xauth','-f',config['xauth_file'],'remove','{net_name}/unix:0'.format(**config)])
+        subprocess.call(['xauth','-f',config['xauth_file'],'remove','{net_name}/unix:0'.format(**config)])
     if config['configure_xauth']: atexit.register( revert_xauth_changes )
     def parent_sigterm_handler( signr, stack ):
       logging.info("Forwarding SIGTERM to child and waiting for it to finish")
@@ -445,7 +446,7 @@ def main():
   else:
     config['parent'] = False
 
-    # make sure we get a signal when parent dies
+    # request a terminate signal if parent dies
     libc.prctl( PR_SET_PDEATHSIG, signal.SIGTERM, 0, 0, 0 )
 
     # call unshare function
@@ -485,23 +486,13 @@ def main():
         open( '{}/memory.limit_in_bytes'.format( config['cg_memory_sub']), 'w' ).write(str( human2bytes(config['max_memory']) ))
         open( '{}/memory.memsw.limit_in_bytes'.format( config['cg_memory_sub']), 'w' ).write(str( human2bytes(config['max_memory']) ))
 
-
     # install signal handler
     def child_sigterm_handler( signr, stack ):
       sys.exit(242)
     signal.signal( signal.SIGTERM, child_sigterm_handler )
 
     # start init
-    initproc = subprocess.Popen(['sleep','infinity'])
-    def init_exit_handler():
-      if initproc.poll() is None:
-        initproc.terminate()
-        try:
-          sys.stdout, sys.stderr = initproc.communicate( sys.stdin, timeout=2 )
-        except subprocess.TimeoutExpired:
-          pass
-      initproc.kill()
-    atexit.register( init_exit_handler )
+    initproc = subprocess.Popen( ['sleep','infinity'], preexec_fn=lambda:libc.prctl( PR_SET_PDEATHSIG, signal.SIGKILL, 0, 0, 0 ) )
 
     # hide /run
     if config['hide_run']:
@@ -538,11 +529,11 @@ def main():
 
     # uts namespace
     if 'CLONE_NEWUTS' in config['unshare_flags']:
-      subprocess.run(['hostname',config['net_name']])
+      subprocess.call(['hostname',config['net_name']])
 
     # network init
     if 'CLONE_NEWNET' in config['unshare_flags']:
-      subprocess.run([
+      subprocess.call([
         'ip','link','add',config['net_name'],
         'type','veth',
         'peer','name',config['net_name'],
@@ -551,7 +542,7 @@ def main():
     # spoof MAC address
     if config['mac_address']:
       if 'CLONE_NEWNET' in config['unshare_flags']:
-        subprocess.run(['ip','link','set',config['net_name'],'address',config['mac_address']])
+        subprocess.call(['ip','link','set',config['net_name'],'address',config['mac_address']])
       else:
         die('Refusing to spoof MAC address on shared network')
 
@@ -559,26 +550,26 @@ def main():
     if 'CLONE_NEWNET' in config['unshare_flags']:
       def change_to_parent_net_namespace():
         libc.setns( parent_net_ns.fileno(), UNSHARE_FLAGS.flags['CLONE_NEWNET'] )
-      subprocess.run(['ip','link','set','lo','up'])
-      subprocess.run(['ip','link','set',config['net_name'],'up'])
-      subprocess.run(['ip','link','set',config['net_name'],'up'],preexec_fn=change_to_parent_net_namespace)
+      subprocess.call(['ip','link','set','lo','up'])
+      subprocess.call(['ip','link','set',config['net_name'],'up'])
+      subprocess.call(['ip','link','set',config['net_name'],'up'],preexec_fn=change_to_parent_net_namespace)
       random_ip_part = random.randint(0,254)
       veth_host_ip4 = '192.168.{}.1'.format(random_ip_part)
       veth_vm_ip4 = '192.168.{}.2'.format(random_ip_part)
       veth_subnet4 = '24'
-      subprocess.run(['ip','address','add','{}/{}'.format(veth_vm_ip4,veth_subnet4),'dev',config['net_name']])
-      subprocess.run(['ip','address','add','{}/{}'.format(veth_host_ip4,veth_subnet4),'dev',config['net_name']],preexec_fn=change_to_parent_net_namespace)
+      subprocess.call(['ip','address','add','{}/{}'.format(veth_vm_ip4,veth_subnet4),'dev',config['net_name']])
+      subprocess.call(['ip','address','add','{}/{}'.format(veth_host_ip4,veth_subnet4),'dev',config['net_name']],preexec_fn=change_to_parent_net_namespace)
       # setting up NAT
       if config['do_nat']:
-        subprocess.run(['sh','-c','echo 1 > /proc/sys/net/ipv4/conf/{net_name}/forwarding'.format(**config)],preexec_fn=set_parent_ns)
+        subprocess.call(['sh','-c','echo 1 > /proc/sys/net/ipv4/conf/{net_name}/forwarding'.format(**config)],preexec_fn=set_parent_ns)
         default_route_interfaces = subprocess.check_output(['sh','-c','ip route show default |grep -o " dev [^ ]*"|cut -d" " -f3-'],preexec_fn=set_parent_ns).strip().decode().split('\n')
         for default_route_interface in default_route_interfaces:
           if not default_route_interface: continue
           logging.warning('Configuring network interface "{}" for masquerading'.format(default_route_interface))
-          subprocess.run(['sh','-c','echo 1 > /proc/sys/net/ipv4/conf/{}/forwarding'.format(default_route_interface)],preexec_fn=set_parent_ns)
+          subprocess.call(['sh','-c','echo 1 > /proc/sys/net/ipv4/conf/{}/forwarding'.format(default_route_interface)],preexec_fn=set_parent_ns)
           cmd='iptables -t nat -C POSTROUTING -o {} -j MASQUERADE'.format(default_route_interface)
-          subprocess.run(['sh','-c','{} 2>/dev/null || {}'.format(cmd,cmd.replace('-C','-A'))],preexec_fn=set_parent_ns)
-        subprocess.run(['ip','route','add','default','via',veth_host_ip4,'dev',config['net_name']])
+          subprocess.call(['sh','-c','{} 2>/dev/null || {}'.format(cmd,cmd.replace('-C','-A'))],preexec_fn=set_parent_ns)
+        subprocess.call(['ip','route','add','default','via',veth_host_ip4,'dev',config['net_name']])
 
     # start tcpdump
     if config['do_tcpdump'] and 'CLONE_NEWNET' in config['unshare_flags']:
@@ -597,8 +588,8 @@ def main():
       if libc.mount( b'proc', b'/proc', b'proc', 
                      ['MS_NOSUID','MS_NOEXEC','MS_NODEV'], ctypes.c_char_p(0) ) is not 0:
         # TODO FIXME
-        workaround = subprocess.run(['mount','proc','-o','nosuid,noexec,nodev','-t','proc','/proc'])
-        if workaround.returncode is not 0:
+        workaround = subprocess.call(['mount','proc','-o','nosuid,noexec,nodev','-t','proc','/proc'])
+        if workaround is not 0:
           die('Mount private /proc failed: {}'.format(os.strerror(ctypes.get_errno())))
 
     # hide other user homes too
@@ -614,10 +605,12 @@ def main():
          config['fs_type'].encode(), 
          [], ctypes.c_char_p(0) ) is not 0:
       die('Mount private home failed: {}'.format(os.strerror(ctypes.get_errno())))
+
     # chown&chmod fresh home
     if config['do_mkfs']:
       os.chown( config['home'], config['uid'], config['gid'] )
       os.chmod( config['home'], 0o700 )
+
     # change directory to new home
     os.chdir(config['home'])
 
@@ -639,7 +632,7 @@ def main():
       for bind_dir in config['bind_dirs']:
         os.removedirs( '{}/{}'.format(private_space,bind_dir) )
 
-    # cgroup device restriction
+    # device restriction
     if config['restrict_devices']:
       if 'CLONE_NEWCGROUP' not in config['unshare_flags']:
         die('Can not restrict devices access without unshared cgroup')
@@ -682,55 +675,22 @@ def main():
       os.environ['XAUTHORITY'] = new_xauth_file
       open( new_xauth_file, 'wb' ).truncate( 0 )
       if 'CLONE_NEWUTS' in config['unshare_flags']:
-        subprocess.run(['xauth','-f',new_xauth_file,'add','{net_name}/unix:0'.format(**config),'.',config['xauth_key']])
+        subprocess.call(['xauth','-f',new_xauth_file,'add','{net_name}/unix:0'.format(**config),'.',config['xauth_key']])
       elif 'xauth_cookie' in config:
         subprocess.Popen(['xauth','-f',new_xauth_file,'add','merge','-']).communicate(config['xauth_cookie'])
       atexit.register( os.unlink, new_xauth_file )
       os.chown( new_xauth_file, config['uid'], config['gid'] )
 
-    # our su implementation
-    def change_user():
+    def application_preexec():
       os.setgid( int(config['gid']) )
       os.setuid( int(config['uid']) )
-
-    def application_preexec():
-      change_user()
-      if config['use_seccomp']:
-        try:
-          import libseccomp.seccomp
-          f = libseccomp.seccomp.SyscallFilter(defaction=libseccomp.seccomp.KILL)
-          for syscall in config['seccomp_syscalls']:
-            if syscall.startswith('-'):
-              try:
-                f.add_rule( libseccomp.seccomp.ERRNO(126), syscall[1:] )
-              except RuntimeError as e:
-                logging.warning('Could not add "{}" funny error rule: {}'.format(syscall[1:],e))
-            elif syscall.startswith('!'):
-              try:
-                # kill is default, so pass
-                pass
-                #f.add_rule( libseccomp.seccomp.KILL, syscall[1:] )
-              except RuntimeError as e:
-                logging.warning('Could not add "{}" kill rule: {}'.format(syscall[1:],e))
-            elif syscall.startswith('?'):
-              try:
-                f.add_rule( libseccomp.seccomp.LOG, syscall[1:] )
-              except RuntimeError as e:
-                logging.warning('Could not add "{}" logging rule: {}'.format(syscall[1:],e))
-            else:
-              try:
-                f.add_rule( libseccomp.seccomp.ALLOW, syscall )
-              except RuntimeError as e:
-                logging.warning('Could not add "{}" allow rule: {}'.format(syscall[1:],e))
-          f.load()
-        except:
-          logging.error("Could not load seccomp rules. python-libsecomp missing?")
+      if config['use_seccomp']: apply_seccomp()
 
     # launch dbus
     if config['do_launch_dbus']:
       if not config['xdg_runtime_dir']:
         die("Can not launch dbus without faking XDG_RUNTIME_DIR")
-      dbus = subprocess.Popen(['dbus-daemon','--session','--address=unix:path={xdg_runtime_dir}/bus-{net_name}'.format(**config),'--nosyslog','--print-address'],stdout=subprocess.PIPE,preexec_fn=application_preexec)
+      dbus = subprocess.Popen(['dbus-daemon','--session','--address=unix:path={xdg_runtime_dir}/bus-{net_name}'.format(**config),'--print-address'],stdout=subprocess.PIPE,preexec_fn=application_preexec)
       dbus_address = dbus.stdout.readline().strip()
       os.environ['DBUS_SESSION_BUS_ADDRESS'] = dbus_address.decode()
 
@@ -740,37 +700,46 @@ def main():
     # finally launch our application ...
     application = subprocess.Popen([config['app_path']]+config['app_arguments'],preexec_fn=application_preexec )
 
-    # teardown helper
-    def application_exit_helper():
-      logging.info('Teardown initiated...')
-      deadline = datetime.datetime.utcnow() + datetime.timedelta(seconds=config['teardown_timeout']-2)
-      while application.poll() is None:
-        logging.info("Subprocess still alive ({}). Sending SIGTERM".format(application.pid))
-        application.terminate()
-        if datetime.datetime.utcnow() > deadline:
-          logging.info("Timed out. Sending SIGKILL")
-          application.kill()
-          sys.exit(1)
-          break
-        try:
-          sys.stdout, sys.stderr = application.communicate( sys.stdin, timeout=1 )
-          time.sleep( 1 )
-        except subprocess.TimeoutExpired:
-          pass
-        if not application.returncode:
-          logging.info("Retrying")
-      sys.exit(application.returncode)
+    # disable Python KeyboardInterrupt handling
+    signal.signal( signal.SIGINT, lambda sig, stack: True )
 
     # connect stdin, stdout and stderr to application
-    while application.poll() is None:
-      try:
-        sys.stdout, sys.stderr = application.communicate( sys.stdin )
-      except KeyboardInterrupt:
-        application.send_signal( signal.SIGINT )
+    sys.stdout, sys.stderr = application.communicate( sys.stdin )
 
-    application.terminate()
-    application_exit_helper()
+    # set exit code
+    sys.exit(application.returncode)
 
+
+def apply_seccomp():
+  try:
+    import libseccomp.seccomp
+    f = libseccomp.seccomp.SyscallFilter(defaction=libseccomp.seccomp.KILL)
+    for syscall in config['seccomp_syscalls']:
+      if syscall.startswith('-'):
+        try:
+          f.add_rule( libseccomp.seccomp.ERRNO(126), syscall[1:] )
+        except RuntimeError as e:
+          logging.warning('Could not add "{}" funny error rule: {}'.format(syscall[1:],e))
+      elif syscall.startswith('!'):
+        try:
+          # kill is default, so pass
+          pass
+          #f.add_rule( libseccomp.seccomp.KILL, syscall[1:] )
+        except RuntimeError as e:
+          logging.warning('Could not add "{}" kill rule: {}'.format(syscall[1:],e))
+      elif syscall.startswith('?'):
+        try:
+          f.add_rule( libseccomp.seccomp.LOG, syscall[1:] )
+        except RuntimeError as e:
+          logging.warning('Could not add "{}" logging rule: {}'.format(syscall[1:],e))
+      else:
+        try:
+          f.add_rule( libseccomp.seccomp.ALLOW, syscall )
+        except RuntimeError as e:
+          logging.warning('Could not add "{}" allow rule: {}'.format(syscall[1:],e))
+    f.load()
+  except:
+    logging.error("Could not load seccomp rules. python-libsecomp missing?")
 
 syscalls = [
 ##############
