@@ -413,14 +413,26 @@ def main():
   child_pid = os.fork()
   if child_pid:
     def clear_cgroup_subs():
-      if os.path.exists( config['cg_devices_sub'] ): os.rmdir( config['cg_devices_sub'] )
-      if os.path.exists( config['cg_memory_sub'] ): os.rmdir( config['cg_memory_sub'] )
-      if os.path.exists( config['cg_cpu_sub'] ): os.rmdir( config['cg_cpu_sub'] )
+      deadline = datetime.datetime.utcnow() + datetime.timedelta(seconds=config['teardown_timeout']/2)
+      while True:
+        try:
+          if os.path.exists( config['cg_devices_sub'] ): os.rmdir( config['cg_devices_sub'] )
+          if os.path.exists( config['cg_memory_sub'] ): os.rmdir( config['cg_memory_sub'] )
+          if os.path.exists( config['cg_cpu_sub'] ): os.rmdir( config['cg_cpu_sub'] )
+          break
+        except OSError as e: pass
+        if datetime.datetime.utcnow() > deadline:
+          logging.error('Timed out while trying to remove our cgroups')
+          return
+        time.sleep(1)
+      logging.info('Successfully reverted cgroups changes')
     atexit.register( clear_cgroup_subs )
     def revert_xauth_changes():
       if os.path.exists(config['xauth_file']):
-        logging.info('Xauth removing "{net_name}/unix:0" from "{xauth_file}"'.format(**config))
-        subprocess.call(['xauth','-f',config['xauth_file'],'remove','{net_name}/unix:0'.format(**config)])
+        if subprocess.call(['xauth','-f',config['xauth_file'],'remove','{net_name}/unix:0'.format(**config)]) is 0:
+          logging.info('Successfully removed "{net_name}/unix:0" from Xauth file "{xauth_file}"'.format(**config))
+        else:
+          logging.eror('Could not remove "{net_name}/unix:0" from Xauth file "{xauth_file}"'.format(**config))
     if config['configure_xauth']: atexit.register( revert_xauth_changes )
     def parent_sigterm_handler( signr, stack ):
       logging.info("Forwarding SIGTERM to child and waiting for it to finish")
@@ -445,6 +457,8 @@ def main():
         os.kill( child_pid, signal.SIGINT )
   else:
     config['parent'] = False
+
+    atexit.register( logging.info, "Child process shutdown complete" )
 
     # request a terminate signal if parent dies
     libc.prctl( PR_SET_PDEATHSIG, signal.SIGTERM, 0, 0, 0 )
@@ -684,7 +698,7 @@ def main():
     def application_preexec():
       os.setgid( int(config['gid']) )
       os.setuid( int(config['uid']) )
-      if config['use_seccomp']: apply_seccomp()
+      if config['use_seccomp']: apply_seccomp( config )
 
     # launch dbus
     if config['do_launch_dbus']:
@@ -710,7 +724,7 @@ def main():
     sys.exit(application.returncode)
 
 
-def apply_seccomp():
+def apply_seccomp( config ):
   try:
     import libseccomp.seccomp
     f = libseccomp.seccomp.SyscallFilter(defaction=libseccomp.seccomp.KILL)
@@ -738,8 +752,9 @@ def apply_seccomp():
         except RuntimeError as e:
           logging.warning('Could not add "{}" allow rule: {}'.format(syscall[1:],e))
     f.load()
-  except:
+  except Exception as e:
     logging.error("Could not load seccomp rules. python-libsecomp missing?")
+    logging.error(e)
 
 syscalls = [
 ##############
