@@ -729,7 +729,7 @@ def main():
       os.environ['DBUS_SESSION_BUS_ADDRESS'] = dbus_address.decode()
 
     # export DISPLAY
-    os.environ['DISPLAY'] = config['display']
+    if config['display']: os.environ['DISPLAY'] = config['display']
 
     # finally launch our application ...
     application = subprocess.Popen([config['app_path']]+config['app_arguments'],preexec_fn=application_preexec )
