@@ -717,6 +717,12 @@ def main():
     # disable Python KeyboardInterrupt handling
     signal.signal( signal.SIGINT, lambda sig, stack: True )
 
+    # experiment start strace
+    if False:
+      application_pid = int(subprocess.check_output(['sh','-c','grep -oE "^NSpid:.*" /proc/{}/status|cut -f3'.format(application.pid)], preexec_fn=lambda:libc.setns( parent_mnt_ns.fileno(), UNSHARE_FLAGS.flags['CLONE_NEWNS'] )))
+      output_filename='{}.{}.strace'.format(config['net_name'],datetime.datetime.utcnow().strftime('%Y%m%d%H%M'))
+      subprocess.Popen( ['strace','-ffo',output_filename,'-p',str(application_pid)], stdin=subprocess.DEVNULL )
+
     # connect stdin, stdout and stderr to application
     sys.stdout, sys.stderr = application.communicate( sys.stdin )
 
@@ -753,9 +759,13 @@ def apply_seccomp( config ):
           logging.warning('Could not add "{}" allow rule: {}'.format(syscall[1:],e))
     f.load()
   except Exception as e:
-    logging.error("Could not load seccomp rules. python-libsecomp missing?")
     logging.error(e)
+    logging.error("Could not load seccomp rules. python-libsecomp missing?")
 
+# seccomp syscall list
+# prefix ! kills process when this syscall is requested
+# prefix - returns "key" ;) error and does not execute syscall
+# prefix ? logs access and executes syscall
 syscalls = [
 ##############
 # filesystem #
@@ -827,15 +837,15 @@ syscalls = [
 # devices #
 ###########
   'ioctl', # control device
-  'ioperm', # set port input/output permissions
-  'iopl', # change I/O privilege level
-  'ioprio_set', 'ioprio_get', # set/get I/O scheduling class and priority
-  'io_cancel', # cancel an outstanding asynchronous I/O operation
-  'io_destroy', # destroy an asynchronous I/O context
+  '-ioperm', # set port input/output permissions
+  '-iopl', # change I/O privilege level
+  '-ioprio_set', 'ioprio_get', # set/get I/O scheduling class and priority
+  '-io_cancel', # cancel an outstanding asynchronous I/O operation
+  '-io_destroy', # destroy an asynchronous I/O context
   'io_getevents', # read asynchronous I/O events from the completion queue
-  'io_setup', # create an asynchronous I/O context
-  'io_submit', # submit asynchronous I/O blocks for processing
-  'mknod', 'mknodat', # create a special or ordinary file
+  '-io_setup', # create an asynchronous I/O context
+  '-io_submit', # submit asynchronous I/O blocks for processing
+  '-mknod', '-mknodat', # create a special or ordinary file
 ###############
 # directories #
 ###############
