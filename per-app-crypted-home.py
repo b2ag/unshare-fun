@@ -518,7 +518,7 @@ def main():
       if not os.path.exists( config['xdg_runtime_dir'] ):
         if not config['hide_run']:
           die('Refusing to create XDG_RUNTIME_DIR without hiding "/run"')
-        os.makedirs( config['xdg_runtime_dir'] )
+        os.makedirs( config['xdg_runtime_dir'], mode=0o755 )
         os.chown( config['xdg_runtime_dir'], config['uid'], config['gid'] )
         os.chmod( config['xdg_runtime_dir'], 0o700 )
       os.environ['XDG_RUNTIME_DIR'] = config['xdg_runtime_dir']
@@ -526,7 +526,8 @@ def main():
     # get a private space for this script
     if 'CLONE_NEWNS' in config['unshare_flags']:
       private_space='/run/{}'.format(os.path.basename(sys.argv[0]))
-      os.makedirs(private_space, exist_ok=True, mode=0o700)
+      os.makedirs( private_space, exist_ok=True )
+      os.chmod( private_space, 0o700 )
       if libc.mount( b'tmpfs', private_space.encode(), b'tmpfs', ['MS_NOSUID','MS_NOEXEC','MS_NODEV'], ctypes.c_char_p(0) ) is not 0:
         die('Could not create a private space: {}'.format(os.strerror(ctypes.get_errno())))
 
@@ -576,7 +577,7 @@ def main():
       # setting up NAT
       if config['do_nat']:
         subprocess.call(['sh','-c','echo 1 > /proc/sys/net/ipv4/conf/{net_name}/forwarding'.format(**config)],preexec_fn=set_parent_ns)
-        default_route_interfaces = subprocess.check_output(['sh','-c','ip route show default |grep -o " dev [^ ]*"|cut -d" " -f3-'],preexec_fn=set_parent_ns).strip().decode().split('\n')
+        default_route_interfaces = subprocess.check_output(['sh','-c','ip route show default|grep default |grep -o " dev [^ ]*"|cut -d" " -f3-'],preexec_fn=set_parent_ns).strip().decode().split('\n')
         for default_route_interface in default_route_interfaces:
           if not default_route_interface: continue
           logging.warning('Configuring network interface "{}" for masquerading'.format(default_route_interface))
