@@ -50,6 +50,7 @@ import ctypes.util
 import datetime
 import distutils.spawn
 import docopt
+import grp
 import hashlib
 import json
 import logging
@@ -700,8 +701,13 @@ def main():
       os.chown( new_xauth_file, config['uid'], config['gid'] )
 
     def application_preexec():
-      os.setgid( int(config['gid']) )
-      os.setuid( int(config['uid']) )
+      user = config['user']
+      uid = int(config['uid'])
+      gid = int(config['gid'])
+      groups = [ gid ] + [ x.gr_gid for x in grp.getgrall() if user in x.gr_mem ]
+      os.setgroups( groups )
+      os.setresgid( gid, gid, gid )
+      os.setresuid( uid,  uid, uid )
       if config['use_seccomp']: apply_seccomp( config )
 
     # launch dbus
