@@ -540,7 +540,7 @@ def main():
            '{}/{}'.format(private_space,bind_dir).encode(), 
            ctypes.c_char_p(0), 
            ['MS_BIND'], ctypes.c_char_p(0) ) is not 0:
-          die('Bind mount "{}" failed: {}'.format(bind_dir,os.strerror(ctypes.get_errno())))
+          logging.error('Bind mount "{}" failed: {}'.format(bind_dir,os.strerror(ctypes.get_errno())))
 
     # uts namespace
     if 'CLONE_NEWUTS' in config['unshare_flags']:
