@@ -30,6 +30,7 @@ Options:
   --skip-hide-tmp                 Skip mount new tmpfs to /tmp
   --skip-ipc                      Skip IPC virtualisation
   --skip-network                  Skip network virtualisation
+  --skip-pid                      Skip PID namespace virtualisation
   --skip-uts                      Skip UTS (hostname) virtualisation
   --skip-bind-x11-unix            Skip bind mount of /tmp/.X11-unix
   --skip-xdg-runtime-dir          Skip providing XDG_RUNTIME_DIR
@@ -157,6 +158,8 @@ def parse_arguments():
   argument2config( '--skip-hide-tmp', 'hide_tmp', 'not' )
   if arguments['--skip-ipc']:
     config['unshare_flags'].remove('CLONE_NEWIPC')
+  if arguments['--skip-pid']:
+    config['unshare_flags'].remove('CLONE_NEWPID')
   if arguments['--skip-network']:
     config['unshare_flags'].remove('CLONE_NEWNET')
   if arguments['--skip-uts']:
