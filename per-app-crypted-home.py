@@ -13,6 +13,7 @@ Options:
   -d, --display=DISPLAY           Display to use
   -f, --fs-type=TYPE              Filesystem type inside container (default: ext4)
   -h, --help                      Display this help and exits
+  --hostname=HOSTNAME             Set hostname (default: $IDSTART$IDEND)
   -H, --hash=COMMAND              Hash executable used to build application identifier (default: sha256sum)
   -i, --id=APPLICATION_ID         Application identifier (default: $BASENAME-$PATHHASH)
   --int-do-mkfs=<0|1>             Used internally when becoming root after creating a new container
@@ -20,6 +21,7 @@ Options:
   -m, --mac-address=MAC           Spoof virtual ethernet MAC address
   --max-memory=SIZE               Set memory limit for container
   -n, --nat                       Setup NAT for internet access
+  --net-name=NETNAME              Set network name (max 16 chars) (default: $IDSTART$IDEND)
   -q, --quiet                     Suppress extra output
   -r, --resize=SIZE               Resize an existing container
   --seccomp                       Sandbox syscalls with seccomp
@@ -118,8 +120,10 @@ def parse_arguments():
   config['container'] = '$HOME/.crypted-homes/$APPLICATION_ID'
   config['fs_type'] = 'ext4'
   config['hashtool'] = 'sha256sum'
+  config['hostname'] = '$IDSTART$IDEND'
   config['app_id'] = '$BASENAME-$PATHHASH'
   config['size'] = '4G'
+  config['net_name'] = '$IDSTART$IDEND'
   config['teardown_timeout'] = 10
   config['quiet'] = False
   config['seccomp_syscalls'] = syscalls
@@ -135,21 +139,25 @@ def parse_arguments():
   if arguments['--quiet'] or config['quiet']:
     logging.getLogger().setLevel( logging.ERROR )
     config['quiet'] = True
-  if arguments['--fs-type']: config['fs_type'] = arguments['--fs-type'].lower()
-  if arguments['--hash']: config['hashtool'] = arguments['--hash']
-  if arguments['--id']: config['app_id'] = arguments['--id']
-  if arguments['--teardown-timeout']: config['teardown_timeout'] = int(arguments['--teardown-timeout'])
   def argument2config( argument_key, config_key, mod='' ):
     if arguments[argument_key] or config_key not in config:
       if mod == '': config[config_key] = arguments[argument_key]
       elif mod == 'not': config[config_key] = not arguments[argument_key]
+      elif mod == 'int': config[config_key] = int(arguments[argument_key])
+      elif mod == 'lower': config[config_key] = arguments[argument_key].lower()
   argument2config( '-b', 'bind_dirs' )
   argument2config( '--container', 'container' )
   argument2config( '--cpu-quota', 'cpu_quota' )
+  argument2config( '--fs-type', 'fs_type', 'lower' )
+  argument2config( '--hash', 'hashtool' )
+  argument2config( '--hostname', 'hostname' )
+  argument2config( '--id', 'app_id' )
   argument2config( '--key-file', 'key_file' )
   argument2config( '--mac-address', 'mac_address' )
   argument2config( '--max-memory', 'max_memory' )
   argument2config( '--nat', 'do_nat' )
+  argument2config( '--net-name', 'net_name' )
+  argument2config( '--teardown-timeout', 'teardown_timeout', 'int' )
   argument2config( '--seccomp', 'use_seccomp' )
   argument2config( '--size', 'size' )
   argument2config( '--skip-dbus-launch', 'do_launch_dbus', 'not' )
@@ -205,9 +213,10 @@ def parse_arguments():
     die("Couldn't find application executable for \"{}\"".format(arguments['<application>']))
   config['app_path_hash'] = subprocess.Popen([config['hashtool']],stdout=subprocess.PIPE,stdin=subprocess.PIPE,stderr=subprocess.DEVNULL).communicate(config['app_path'].encode()+b'\n')[0].decode().split(' ')[0] # extra newline for compability with bash script version
   config['app_id'] = config['app_id'].replace('$BASENAME',config['app_basename']).replace('$PATHHASH',config['app_path_hash'])
+  config['hostname'] = config['hostname'].replace('$IDSTART',config['app_id'][:8]).replace('$IDEND',config['app_id'][-7:])
   config['container'] = config['container'].replace('$HOME',config['home']).replace('$APPLICATION_ID', config['app_id'])
   config['open_container'] = '/dev/mapper/{}'.format(config['app_id'])
-  config['net_name'] = config['app_id'][:8] + config['app_id'][-7:]
+  config['net_name'] = config['net_name'].replace('$IDSTART',config['app_id'][:8]).replace('$IDEND',config['app_id'][-7:])
   config['cg_cpu_sub'] = '/sys/fs/cgroup/cpu/{}'.format(config['net_name'])
   config['cg_devices_sub'] = '/sys/fs/cgroup/devices/{}'.format(config['net_name'])
   config['cg_memory_sub'] = '/sys/fs/cgroup/memory/{}'.format(config['net_name'])
@@ -406,9 +415,9 @@ def main():
       match = re.search(b'.* -auth (/[^ ]+)',pgrep)
       if match:
         config['xauth_file'] = match.group(1).decode()
-        logging.info('Xauth adding "{net_name}/unix:0" to host auth file "{xauth_file}"'.format(**config))
+        logging.info('Xauth adding "{hostname}/unix:0" to host auth file "{xauth_file}"'.format(**config))
         if os.path.exists(config['xauth_file']):
-          subprocess.call(['xauth','-f',config['xauth_file'],'add','{net_name}/unix:0'.format(**config),'.',config['xauth_key']])
+          subprocess.call(['xauth','-f',config['xauth_file'],'add','{hostname}/unix:0'.format(**config),'.',config['xauth_key']])
     elif config['display'] and config['display'].startswith(':'):
       # extract existing xauth cookie
       config['xauth_cookie'] = subproccess.check_output(['xauth','extract','-','{}/unix{}'.format(os.uname().nodename,config['display'])])
@@ -433,10 +442,10 @@ def main():
     atexit.register( clear_cgroup_subs )
     def revert_xauth_changes():
       if os.path.exists(config['xauth_file']):
-        if subprocess.call(['xauth','-f',config['xauth_file'],'remove','{net_name}/unix:0'.format(**config)]) is 0:
-          logging.info('Successfully removed "{net_name}/unix:0" from Xauth file "{xauth_file}"'.format(**config))
+        if subprocess.call(['xauth','-f',config['xauth_file'],'remove','{hostname}/unix:0'.format(**config)]) is 0:
+          logging.info('Successfully removed "{hostname}/unix:0" from Xauth file "{xauth_file}"'.format(**config))
         else:
-          logging.eror('Could not remove "{net_name}/unix:0" from Xauth file "{xauth_file}"'.format(**config))
+          logging.eror('Could not remove "{hostname}/unix:0" from Xauth file "{xauth_file}"'.format(**config))
     if config['configure_xauth']: atexit.register( revert_xauth_changes )
     def parent_sigterm_handler( signr, stack ):
       logging.info("Forwarding SIGTERM to child and waiting for it to finish")
@@ -548,7 +557,7 @@ def main():
 
     # uts namespace
     if 'CLONE_NEWUTS' in config['unshare_flags']:
-      subprocess.call(['hostname',config['net_name']])
+      subprocess.call(['hostname',config['hostname']])
 
     # network init
     if 'CLONE_NEWNET' in config['unshare_flags']:
@@ -690,11 +699,11 @@ def main():
 
     # handle xauth
     if config['configure_xauth']:
-      new_xauth_file = '{home}/.Xauthority-{net_name}'.format(**config)
+      new_xauth_file = '{home}/.Xauthority-{hostname}'.format(**config)
       os.environ['XAUTHORITY'] = new_xauth_file
       open( new_xauth_file, 'wb' ).truncate( 0 )
       if 'CLONE_NEWUTS' in config['unshare_flags']:
-        subprocess.call(['xauth','-f',new_xauth_file,'add','{net_name}/unix:0'.format(**config),'.',config['xauth_key']])
+        subprocess.call(['xauth','-f',new_xauth_file,'add','{hostname}/unix:0'.format(**config),'.',config['xauth_key']])
       elif 'xauth_cookie' in config:
         subprocess.Popen(['xauth','-f',new_xauth_file,'add','merge','-']).communicate(config['xauth_cookie'])
       atexit.register( os.unlink, new_xauth_file )
@@ -714,7 +723,7 @@ def main():
     if config['do_launch_dbus']:
       if not config['xdg_runtime_dir']:
         die("Can not launch dbus without faking XDG_RUNTIME_DIR")
-      dbus = subprocess.Popen(['dbus-daemon','--session','--address=unix:path={xdg_runtime_dir}/bus-{net_name}'.format(**config),'--print-address'],stdout=subprocess.PIPE,preexec_fn=application_preexec)
+      dbus = subprocess.Popen(['dbus-daemon','--session','--address=unix:path={xdg_runtime_dir}/bus-{hostname}'.format(**config),'--print-address'],stdout=subprocess.PIPE,preexec_fn=application_preexec)
       dbus_address = dbus.stdout.readline().strip()
       os.environ['DBUS_SESSION_BUS_ADDRESS'] = dbus_address.decode()
 
@@ -730,7 +739,7 @@ def main():
     # experiment start strace
     if False:
       application_pid = int(subprocess.check_output(['sh','-c','grep -oE "^NSpid:.*" /proc/{}/status|cut -f3'.format(application.pid)], preexec_fn=lambda:libc.setns( parent_mnt_ns.fileno(), UNSHARE_FLAGS.flags['CLONE_NEWNS'] )))
-      output_filename='{}.{}.strace'.format(config['net_name'],datetime.datetime.utcnow().strftime('%Y%m%d%H%M'))
+      output_filename='{}.{}.strace'.format(config['hostname'],datetime.datetime.utcnow().strftime('%Y%m%d%H%M'))
       subprocess.Popen( ['strace','-ffo',output_filename,'-p',str(application_pid)], stdin=subprocess.DEVNULL )
 
     # connect stdin, stdout and stderr to application
