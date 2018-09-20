@@ -228,7 +228,8 @@ def parse_arguments():
     config['verbose'] = True
   new_cmdline = [ sys.argv[0] ]
   new_cmdline += [ '--user', config['user'] ]
-  new_cmdline += [ '--display', config['display'] ]
+  if config['display']:
+    new_cmdline += [ '--display', config['display'] ]
   for argument, value in arguments.items():
     if not argument.startswith('-'): continue
     if type(value) is bool:
