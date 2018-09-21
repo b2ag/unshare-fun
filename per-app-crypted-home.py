@@ -370,7 +370,8 @@ def main():
     if not os.path.exists( config['container'] ):
       config['do_mkfs'] = True
       create_empty_container( config )
-    escalate_priviledges( config )
+    escalate_priviledges( config ) # -> sys.exit
+  os.umask(0o22) # ensure we use a normal umask
   if not os.path.exists( config['container'] ):
     die("Container \"{container}\" does not exist".format(**config))
   if config['do_mkfs']:
